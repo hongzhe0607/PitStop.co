@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#ffffff">
+    <meta name="description" content="Run the PitStop.co shop: sales, orders, and product listings.">
+    <meta name="robots" content="noindex">
+    <title>Shop dashboard | PitStop.co</title>
+    <link rel="stylesheet" href="styles/main.css">
+    <script src="scripts/account.js" defer></script>
+    <script src="scripts/orders.js" defer></script>
+    <script src="scripts/admin.js" defer></script>
+  </head>
+  <body class="admin-body">
+    <div class="top-strip">A small shop for diecast car collectors</div>
+    <header class="site-header">
+      <a class="brand" href="index.html" aria-label="PitStop.co home">PitStop<span>.co</span></a>
+      <nav class="main-nav" aria-label="Main navigation">
+        <a href="diecast.html">Diecast</a><a href="about.html">About</a><a href="contact.html">Contact</a>
+        <span id="account-slot"></span>
+      </nav>
+    </header>
+    <main>
+      <section class="admin-page">
+        <div class="admin-header">
+          <div>
+            <p class="eyebrow">ADMINISTRATION</p>
+            <h1>Shop dashboard</h1>
+            <p class="admin-greeting" id="admin-greeting">Orders, stock, and listings in one place.</p>
+          </div>
+          <a class="admin-view-shop" href="diecast.html">View shop <span aria-hidden="true">→</span></a>
+        </div>
+        <p class="form-message" id="admin-message" role="status"></p>
+        <div class="admin-tabs" role="tablist" aria-label="Dashboard sections">
+          <button type="button" role="tab" id="tab-dashboard" aria-controls="panel-dashboard" data-tab="dashboard">Overview</button>
+          <button type="button" role="tab" id="tab-orders" aria-controls="panel-orders" data-tab="orders">Orders <span class="tab-count" id="pending-badge" hidden></span></button>
+          <button type="button" role="tab" id="tab-products" aria-controls="panel-products" data-tab="products">Products</button>
+        </div>
+
+        <section class="admin-panel" id="panel-dashboard" role="tabpanel" aria-labelledby="tab-dashboard">
+          <div class="stat-grid">
+            <article class="stat-tile">
+              <div class="stat-top"><p>Sales</p><span class="stat-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M4 17l5-5 4 4 7-8"></path><path d="M15 8h5v5"></path></svg></span></div>
+              <strong id="stat-sales">–</strong><small id="stat-sales-sub"></small>
+            </article>
+            <article class="stat-tile">
+              <div class="stat-top"><p>Orders to confirm</p><span class="stat-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M6 4h12v16H6z"></path><path d="M9 9h6M9 13h6M9 17h3"></path></svg></span></div>
+              <strong id="stat-pending">–</strong><small id="stat-pending-sub"></small>
+            </article>
+            <article class="stat-tile">
+              <div class="stat-top"><p>Customers</p><span class="stat-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><circle cx="12" cy="8" r="3.5"></circle><path d="M5.5 20v-1.2a6.5 6.5 0 0 1 13 0V20z"></path></svg></span></div>
+              <strong id="stat-customers">–</strong><small id="stat-customers-sub"></small>
+            </article>
+            <article class="stat-tile">
+              <div class="stat-top"><p>Units in stock</p><span class="stat-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M4 8l8-4 8 4v8l-8 4-8-4z"></path><path d="M4 8l8 4 8-4M12 12v8"></path></svg></span></div>
+              <strong id="stat-stock">–</strong><small id="stat-stock-sub"></small>
+            </article>
+          </div>
+          <section class="dash-card">
+            <div class="dash-card-heading"><h2>Order flow</h2><p>Select a stage to see its orders</p></div>
+            <ol class="order-flow" id="order-flow"></ol>
+          </section>
+          <div class="dashboard-columns">
+            <section class="dash-card">
+              <div class="dash-card-heading"><h2>Recent orders</h2><button class="dash-link" type="button" data-flow="all">View all</button></div>
+              <div class="dashboard-list" id="recent-orders"></div>
+            </section>
+            <div class="dashboard-stack">
+              <section class="dash-card">
+                <div class="dash-card-heading"><h2>Stock alerts</h2><p>2 or fewer left</p></div>
+                <div class="dashboard-list" id="stock-alerts"></div>
+              </section>
+              <section class="dash-card">
+                <div class="dash-card-heading"><h2>Best sellers</h2></div>
+                <div class="dashboard-list" id="top-products"></div>
+              </section>
+            </div>
+          </div>
+        </section>
+
+        <section class="admin-panel" id="panel-orders" role="tabpanel" aria-labelledby="tab-orders" hidden>
+          <div class="dash-card">
+            <div class="orders-toolbar">
+              <label><span class="sr-only">Show orders</span><select id="order-filter">
+                <option value="all">All orders</option>
+                <option value="pending">Pending</option>
+                <option value="confirmed">Confirmed</option>
+                <option value="shipped">Shipped</option>
+                <option value="completed">Completed</option>
+                <option value="cancelled">Cancelled</option>
+              </select></label>
+              <p id="order-count" aria-live="polite"></p>
+            </div>
+            <p class="form-message" id="orders-message" role="status"></p>
+            <div class="admin-order-list" id="admin-order-list"></div>
+          </div>
+        </section>
+
+        <section class="admin-panel" id="panel-products" role="tabpanel" aria-labelledby="tab-products" hidden>
+          <div class="products-layout">
+            <section class="dash-card admin-products" aria-labelledby="admin-products-heading">
+              <div class="dash-card-heading"><h2 id="admin-products-heading">Current products</h2><p id="product-count"></p></div>
+              <p class="form-message" id="products-message" role="status"></p>
+              <div class="admin-product-list" id="admin-product-list"></div>
+            </section>
+            <form class="dash-card admin-form" id="product-form">
+              <h2 id="product-form-title">Add a product</h2>
+              <div class="admin-form-grid">
+                <label class="span-2">Product ID<input id="product-id" name="id" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required placeholder="e.g. mini-gt-skyline"></label>
+                <label class="span-2">Name<input name="name" required maxlength="120"></label>
+                <label>Brand<input name="make" required maxlength="80"></label>
+                <label>Category<input name="category" required maxlength="40"></label>
+                <label>Scale<input name="scale" required maxlength="40" placeholder="1:64 scale"></label>
+                <label>Condition<input name="condition" required maxlength="80"></label>
+                <label>Price (RM)<input name="price" type="number" min="0.01" step="0.01" required></label>
+                <label>Stock<input name="stock" type="number" min="0" step="1" required></label>
+                <label class="span-2">Photo<input name="image" type="text" maxlength="2000" placeholder="images/car.jpg or https://…"></label>
+                <label class="span-2">Photo description<input name="imageAlt" maxlength="200"></label>
+                <label class="span-2">Description<textarea name="description" rows="3" required maxlength="500"></textarea></label>
+              </div>
+              <div class="admin-checkboxes">
+                <label><input name="bestSeller" type="checkbox"> Best seller</label>
+                <label><input name="newArrival" type="checkbox"> New arrival</label>
+              </div>
+              <p class="form-message" id="form-message" role="status"></p>
+              <div class="admin-form-actions">
+                <button class="primary-link account-submit" type="submit">Add product</button>
+                <button class="secondary-button" id="cancel-edit" type="button" hidden>Cancel edit</button>
+              </div>
+            </form>
+          </div>
+        </section>
+      </section>
+    </main>
+    <footer class="site-footer">
+      <div class="site-footer-inner">
+        <div class="footer-main">
+          <div><a class="brand" href="index.html">PitStop<span>.co</span></a><p class="footer-tagline">A small shop for diecast car collectors.</p></div>
+          <nav class="footer-nav" aria-label="Footer navigation"><a href="diecast.html">Diecast</a><a href="about.html">About us</a><a href="contact.html">Contact</a></nav>
+        </div>
+        <div class="footer-bottom"><p>© <span id="year"></span> PitStop.co</p><p>Made for collectors.</p></div>
+      </div>
+    </footer>
+  </body>
+</html>

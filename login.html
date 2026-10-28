@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#ffffff">
+    <meta name="description" content="Sign in to your PitStop.co customer account.">
+    <title>Sign in | PitStop.co</title>
+    <link rel="stylesheet" href="styles/main.css">
+    <script src="scripts/account.js" defer></script>
+    <script src="scripts/auth-pages.js" defer></script>
+  </head>
+  <body>
+    <div class="top-strip">A small shop for diecast car collectors</div>
+    <header class="site-header">
+      <a class="brand" href="index.html" aria-label="PitStop.co home">PitStop<span>.co</span></a>
+      <nav class="main-nav" aria-label="Main navigation">
+        <a href="diecast.html">Diecast</a><a href="about.html">About</a><a href="contact.html">Contact</a>
+        <span id="account-slot"></span>
+      </nav>
+    </header>
+    <main>
+      <section class="account-page">
+        <p class="eyebrow">CUSTOMER ACCOUNT</p>
+        <h1>Welcome back.</h1>
+        <p class="account-intro">Sign in to add models to your bag and manage your profile.</p>
+        <form class="account-form" id="login-form">
+          <label for="email">Email address</label>
+          <input id="email" name="email" type="email" autocomplete="email" maxlength="254" required>
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required>
+          <p class="form-message" id="form-message" role="alert"></p>
+          <button class="primary-link account-submit" type="submit">Sign in</button>
+        </form>
+        <p class="account-switch">New to PitStop.co? <a href="register.html">Create an account</a></p>
+      </section>
+    </main>
+    <footer class="site-footer">
+      <div class="site-footer-inner">
+        <div class="footer-main">
+          <div><a class="brand" href="index.html">PitStop<span>.co</span></a><p class="footer-tagline">A small shop for diecast car collectors.</p></div>
+          <nav class="footer-nav" aria-label="Footer navigation"><a href="diecast.html">Diecast</a><a href="about.html">About us</a><a href="contact.html">Contact</a></nav>
+        </div>
+        <div class="footer-bottom"><p>© <span id="year"></span> PitStop.co</p><p>Made for collectors.</p></div>
+      </div>
+    </footer>
+  </body>
+</html>

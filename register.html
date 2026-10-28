@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#ffffff">
+    <meta name="description" content="Create a customer account at PitStop.co.">
+    <title>Create account | PitStop.co</title>
+    <link rel="stylesheet" href="styles/main.css">
+    <script src="scripts/account.js" defer></script>
+    <script src="scripts/auth-pages.js" defer></script>
+  </head>
+  <body>
+    <div class="top-strip">A small shop for diecast car collectors</div>
+    <header class="site-header">
+      <a class="brand" href="index.html" aria-label="PitStop.co home">PitStop<span>.co</span></a>
+      <nav class="main-nav" aria-label="Main navigation">
+        <a href="diecast.html">Diecast</a><a href="about.html">About</a><a href="contact.html">Contact</a>
+        <span id="account-slot"></span>
+      </nav>
+    </header>
+    <main>
+      <section class="account-page">
+        <p class="eyebrow">JOIN THE SHOP</p>
+        <h1>Create your account.</h1>
+        <p class="account-intro">Create an account to add models to your bag and keep your collection shopping in one place.</p>
+        <form class="account-form" id="register-form">
+          <label for="name">Your name</label>
+          <input id="name" name="name" type="text" autocomplete="name" maxlength="80" required>
+          <label for="email">Email address</label>
+          <input id="email" name="email" type="email" autocomplete="email" maxlength="254" required>
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="new-password" minlength="10" maxlength="128" required>
+          <span class="field-hint">Use at least 10 characters.</span>
+          <p class="form-message" id="form-message" role="alert"></p>
+          <button class="primary-link account-submit" type="submit">Create account</button>
+        </form>
+        <p class="account-switch">Already registered? <a href="login.html">Sign in</a></p>
+      </section>
+    </main>
+    <footer class="site-footer">
+      <div class="site-footer-inner">
+        <div class="footer-main">
+          <div><a class="brand" href="index.html">PitStop<span>.co</span></a><p class="footer-tagline">A small shop for diecast car collectors.</p></div>
+          <nav class="footer-nav" aria-label="Footer navigation"><a href="diecast.html">Diecast</a><a href="about.html">About us</a><a href="contact.html">Contact</a></nav>
+        </div>
+        <div class="footer-bottom"><p>© <span id="year"></span> PitStop.co</p><p>Made for collectors.</p></div>
+      </div>
+    </footer>
+  </body>
+</html>

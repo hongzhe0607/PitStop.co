@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#ffffff">
+    <meta name="description" content="Manage your PitStop.co account profile.">
+    <title>My profile | PitStop.co</title>
+    <link rel="stylesheet" href="styles/main.css">
+    <script src="scripts/account.js" defer></script>
+    <script src="scripts/orders.js" defer></script>
+    <script src="scripts/profile.js" defer></script>
+  </head>
+  <body>
+    <div class="top-strip">A small shop for diecast car collectors</div>
+    <header class="site-header">
+      <a class="brand" href="index.html" aria-label="PitStop.co home">PitStop<span>.co</span></a>
+      <nav class="main-nav" aria-label="Main navigation">
+        <a href="diecast.html">Diecast</a><a href="about.html">About</a><a href="contact.html">Contact</a>
+        <span id="account-slot"></span>
+      </nav>
+    </header>
+    <main>
+      <section class="account-page">
+        <p class="eyebrow">YOUR ACCOUNT</p>
+        <h1>My profile.</h1>
+        <p class="account-intro">Update the name shown on your account. Your email address is used to sign in.</p>
+        <form class="account-form" id="profile-form">
+          <label for="name">Your name</label>
+          <input id="name" name="name" type="text" autocomplete="name" maxlength="80" required>
+          <label for="email">Email address</label>
+          <input id="email" name="email" type="email" autocomplete="email" readonly>
+          <p class="profile-role" id="profile-role"></p>
+          <p class="form-message" id="form-message" role="status"></p>
+          <button class="primary-link account-submit" type="submit">Save profile</button>
+        </form>
+        <p id="admin-shortcut" hidden><a href="admin.html">Open the shop dashboard →</a></p>
+        <section class="my-orders" aria-labelledby="my-orders-heading">
+          <h2 id="my-orders-heading">My orders</h2>
+          <p class="form-message" id="orders-message" role="status"></p>
+          <div id="my-order-list"></div>
+        </section>
+        <div class="profile-actions">
+          <button class="secondary-button" id="profile-signout" type="button">Sign out</button>
+          <p class="form-message" id="signout-message" role="status" aria-live="polite"></p>
+        </div>
+      </section>
+    </main>
+    <footer class="site-footer">
+      <div class="site-footer-inner">
+        <div class="footer-main">
+          <div><a class="brand" href="index.html">PitStop<span>.co</span></a><p class="footer-tagline">A small shop for diecast car collectors.</p></div>
+          <nav class="footer-nav" aria-label="Footer navigation"><a href="diecast.html">Diecast</a><a href="about.html">About us</a><a href="contact.html">Contact</a></nav>
+        </div>
+        <div class="footer-bottom"><p>© <span id="year"></span> PitStop.co</p><p>Made for collectors.</p></div>
+      </div>
+    </footer>
+  </body>
+</html>
