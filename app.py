@@ -167,6 +167,12 @@ def init_db():
                 price REAL NOT NULL,
                 quantity INTEGER NOT NULL CHECK (quantity > 0)
             );
+            CREATE TABLE IF NOT EXISTS wishlist_items (
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, product_id)
+            );
             CREATE INDEX IF NOT EXISTS orders_by_user ON orders (user_id, created_at);
             CREATE INDEX IF NOT EXISTS order_items_by_order ON order_items (order_id);
             """
@@ -343,7 +349,7 @@ def home_page():
 
 @app.get("/<page>.html")
 def html_page(page):
-    allowed = {"index", "diecast", "about", "contact", "login", "register", "profile", "admin"}
+    allowed = {"index", "diecast", "product", "about", "contact", "login", "register", "profile", "admin"}
     if page not in allowed:
         abort(404)
     return send_from_directory(ROOT, f"{page}.html")
@@ -530,6 +536,49 @@ def update_cart_item(product_id):
         )
     db.commit()
     return get_cart()
+
+
+def wishlist_response(user_id):
+    rows = get_db().execute(
+        """
+        SELECT p.* FROM wishlist_items w JOIN products p ON p.id = w.product_id
+        WHERE w.user_id = ? ORDER BY w.created_at DESC
+        """,
+        (user_id,),
+    )
+    return jsonify(items=[product_payload(row) for row in rows])
+
+
+@app.get("/api/wishlist")
+@require_user
+def get_wishlist():
+    return wishlist_response(session["user_id"])
+
+
+@app.put("/api/wishlist/<product_id>")
+@require_user
+def add_to_wishlist(product_id):
+    db = get_db()
+    if db.execute("SELECT 1 FROM products WHERE id = ?", (product_id,)).fetchone() is None:
+        return jsonify(error="That model is no longer available."), 404
+    db.execute(
+        "INSERT OR IGNORE INTO wishlist_items (user_id, product_id, created_at) VALUES (?, ?, ?)",
+        (session["user_id"], product_id, datetime.now(timezone.utc).isoformat()),
+    )
+    db.commit()
+    return wishlist_response(session["user_id"])
+
+
+@app.delete("/api/wishlist/<product_id>")
+@require_user
+def remove_from_wishlist(product_id):
+    db = get_db()
+    db.execute(
+        "DELETE FROM wishlist_items WHERE user_id = ? AND product_id = ?",
+        (session["user_id"], product_id),
+    )
+    db.commit()
+    return wishlist_response(session["user_id"])
 
 
 def order_payloads(db, rows, include_customer=False):

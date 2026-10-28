@@ -58,7 +58,7 @@
       );
       return;
     }
-    slot.append(createLink("profile.html", "Profile"));
+    slot.append(createLink("diecast.html?saved=1", "Saved models"), createLink("profile.html", "Profile"));
     if (currentUser.role === "admin") slot.append(createLink("admin.html", "Admin"));
   }
 
@@ -70,6 +70,11 @@
       link.setAttribute("aria-label", label);
       link.title = label;
       link.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="8" r="3.5"></circle><path d="M5.5 20v-1.2a6.5 6.5 0 0 1 13 0V20z"></path></svg>';
+    } else if (label === "Saved models") {
+      link.className = "profile-link";
+      link.setAttribute("aria-label", label);
+      link.title = label;
+      link.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10Z"></path></svg>';
     } else {
       link.textContent = label;
     }

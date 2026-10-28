@@ -195,6 +195,20 @@ class StorefrontTests(unittest.TestCase):
             storefront.ADMIN_EMAILS = original
         self.assertEqual(response.get_json()["user"]["role"], "admin")
 
+    def test_wishlist_is_per_account(self):
+        self.assertEqual(self.request_with_csrf("PUT", "/api/wishlist/midnight-gt").status_code, 401)
+        self.register_customer()
+        response = self.request_with_csrf("PUT", "/api/wishlist/midnight-gt")
+        self.assertEqual([item["id"] for item in response.get_json()["items"]], ["midnight-gt"])
+        self.request_with_csrf("PUT", "/api/wishlist/midnight-gt")
+        self.assertEqual(len(self.client.get("/api/wishlist").get_json()["items"]), 1)
+        self.assertEqual(self.request_with_csrf("PUT", "/api/wishlist/no-such-car").status_code, 404)
+        response = self.request_with_csrf("DELETE", "/api/wishlist/midnight-gt")
+        self.assertEqual(response.get_json()["items"], [])
+
+    def test_product_page_is_served(self):
+        self.assertEqual(self.client.get("/product.html").status_code, 200)
+
     def test_local_product_images_must_be_in_images_folder(self):
         product = {"name": "Test", "make": "PitStop", "scale": "1:64", "category": "Classic",
                    "price": 10, "stock": 1, "bestSeller": False, "newArrival": False,

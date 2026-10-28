@@ -35,13 +35,21 @@ When `PITSTOP_SECRET_KEY` is not set, the app generates a session key once and s
 - `app.py` — Flask routes, account authentication, role checks, SQLite data access, and the admin command.
 - `data/settings.json` — admin emails (`adminEmails`) and the shop's contact email (`shopEmail`). Restart the app after editing it.
 - `data/catalog.json` — initial product listings and filter categories. Imported into SQLite the first time the app starts with an empty product table.
-- `index.html`, `diecast.html`, `about.html`, `contact.html` — storefront and information pages.
+- `index.html`, `diecast.html`, `product.html`, `about.html`, `contact.html` — storefront, product detail, and information pages.
 - `login.html`, `register.html`, `profile.html`, `admin.html` — sign-in, account creation, profile, and product administration pages.
 - `images/` — product photos. In the admin editor, enter a photo as `images/your-file.jpg`, or use an HTTPS URL.
 - `scripts/` — browser-side account, catalog, cart, and admin interactions.
 - `styles/main.css` — shared responsive presentation.
 
 Replace the demo listings in `data/catalog.json` before first launch. After the database has been initialized, use the admin page to maintain products; edits are saved in SQLite. Set `shopEmail` in `data/settings.json` (or the `PITSTOP_SHOP_EMAIL` environment variable, which takes priority) to show the shop's address on the contact page; until then the page says the address is coming soon.
+
+## Shopping features
+
+- **Homepage**: hero banner, shop-by-category tiles, a featured model (the first in-stock best seller), best sellers, new arrivals, and shop-by-brand links.
+- **Product pages**: every model opens at `product.html?id=<product-id>` with details, a quantity picker, and related models.
+- **Saved models**: signed-in customers tap the heart on any model to save it to their account. The heart in the header, or **Saved only** on the Diecast page, shows them.
+- **Badges and sorting**: cards show New, Best seller, Only N left!, and Sold out. The Diecast page sorts by featured, newest, price, or name, and its filters are kept in the link so a filtered view can be shared.
+- Animations are switched off for visitors whose device is set to reduce motion.
 
 ## Orders and the dashboard
 

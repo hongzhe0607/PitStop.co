@@ -35,14 +35,33 @@
     </header>
 
     <main>
-      <section class="home-intro">
-        <p class="eyebrow">WELCOME TO PITSTOP.CO</p>
-        <h1>Find a car for your collection.</h1>
-        <p>Browse the latest models and collector favourites. New listings are added as they arrive.</p>
-        <a class="primary-link" href="diecast.html">Browse all diecast cars <span aria-hidden="true">→</span></a>
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="hero-eyebrow">WELCOME TO PITSTOP.CO</p>
+          <h1>Find a car for your collection.</h1>
+          <p>Collector diecast from Mini GT, Inno64, Kaido House and more. Every listing shows its scale, condition, and how many are left.</p>
+          <div class="hero-actions">
+            <a class="hero-primary" href="diecast.html">Shop all cars <span aria-hidden="true">→</span></a>
+            <a class="hero-secondary" href="diecast.html?sort=newest">See new arrivals</a>
+          </div>
+          <ul class="hero-stats" id="hero-stats" aria-label="Shop at a glance"></ul>
+        </div>
+        <div class="hero-art">
+          <figure class="hero-photo">
+            <img src="images/hero-p1.jpg" alt="Cherry red P1 diecast model with gold wheels" width="764" height="1080">
+          </figure>
+        </div>
       </section>
 
-      <section class="home-products">
+      <section class="shop-by" data-reveal aria-labelledby="category-heading">
+        <div class="section-heading">
+          <div><p class="eyebrow">BROWSE</p><h2 id="category-heading">Shop by category</h2></div>
+          <a class="section-link" href="diecast.html">All models →</a>
+        </div>
+        <div class="category-tiles" id="category-tiles"></div>
+      </section>
+
+      <section class="home-products" data-reveal>
         <div class="section-heading">
           <div><p class="eyebrow">COLLECTOR FAVOURITES</p><h2>Best sellers</h2></div>
           <a class="section-link" href="diecast.html">Shop all cars →</a>
@@ -50,23 +69,30 @@
         <div class="product-grid" id="best-sellers" aria-live="polite"></div>
       </section>
 
-      <section class="home-products arrivals-section">
+      <section class="featured-section" data-reveal aria-labelledby="featured-heading">
+        <div class="section-heading">
+          <div><p class="eyebrow">SPOTLIGHT</p><h2 id="featured-heading">Featured model</h2></div>
+        </div>
+        <article class="featured-card" id="featured"></article>
+      </section>
+
+      <section class="home-products arrivals-section" data-reveal>
         <div class="section-heading">
           <div><p class="eyebrow">FRESH ON THE SHELF</p><h2>Just arrived</h2></div>
-          <a class="section-link" href="diecast.html">See all arrivals →</a>
+          <a class="section-link" href="diecast.html?sort=newest">See all arrivals →</a>
         </div>
         <div class="product-grid" id="new-arrivals" aria-live="polite"></div>
       </section>
 
-      <section class="brand-listing" aria-labelledby="brand-heading">
+      <section class="brand-listing" data-reveal aria-labelledby="brand-heading">
         <div>
           <p class="eyebrow">BRANDS AT PITSTOP.CO</p>
-          <h2 id="brand-heading">Brands we carry</h2>
+          <h2 id="brand-heading">Shop by brand</h2>
         </div>
         <ul id="brand-list"></ul>
       </section>
 
-      <section class="home-about">
+      <section class="home-about" data-reveal>
         <div>
           <p class="eyebrow">ABOUT THE SHOP</p>
           <h2>For the love of little cars.</h2>

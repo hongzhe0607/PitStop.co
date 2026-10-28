@@ -7,7 +7,7 @@
     const next = new URLSearchParams(window.location.search).get("next");
     if (next) {
       const target = new URL(next, window.location.origin);
-      const allowedPaths = new Set(["/", "/index.html", "/diecast.html", "/about.html", "/contact.html", "/profile.html", "/admin.html"]);
+      const allowedPaths = new Set(["/", "/index.html", "/diecast.html", "/about.html", "/contact.html", "/product.html", "/profile.html", "/admin.html"]);
       if (target.origin === window.location.origin && allowedPaths.has(target.pathname)) {
         window.location.assign(`${target.pathname}${target.search}${target.hash}`);
         return;
