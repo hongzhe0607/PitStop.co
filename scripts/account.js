@@ -62,24 +62,87 @@
     if (currentUser.role === "admin") slot.append(createLink("admin.html", "Admin"));
   }
 
+  const ACCOUNT_ICONS = {
+    "Sign in": '<path d="M14 4.5h3.5a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H14"></path><path d="m10 16 4-4-4-4M14 12H4.5"></path>',
+    Register: '<circle cx="10" cy="8" r="3.5"></circle><path d="M3.5 20v-1.2a6.5 6.5 0 0 1 10.5-5.1M18 14v6M15 17h6"></path>',
+    "Saved models": '<path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10Z"></path>',
+    Profile: '<circle cx="12" cy="8" r="3.5"></circle><path d="M5.5 20v-1.2a6.5 6.5 0 0 1 13 0V20z"></path>',
+    Admin: '<rect x="4" y="4" width="7" height="7" rx="1.5"></rect><rect x="13" y="4" width="7" height="7" rx="1.5"></rect><rect x="4" y="13" width="7" height="7" rx="1.5"></rect><rect x="13" y="13" width="7" height="7" rx="1.5"></rect>',
+  };
+
   function createLink(href, label) {
     const link = document.createElement("a");
     link.href = href;
-    if (label === "Profile") {
-      link.className = "profile-link";
+    link.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ACCOUNT_ICONS[label]}</svg>`;
+    const text = document.createElement("span");
+    text.textContent = label;
+    link.append(text);
+    if (label === "Register") link.classList.add("account-cta");
+    if (["Saved models", "Profile", "Admin"].includes(label)) {
+      // These shrink to icons on small screens, so keep a spoken and hover label.
+      link.classList.add("account-icon-link");
       link.setAttribute("aria-label", label);
       link.title = label;
-      link.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="8" r="3.5"></circle><path d="M5.5 20v-1.2a6.5 6.5 0 0 1 13 0V20z"></path></svg>';
-    } else if (label === "Saved models") {
-      link.className = "profile-link";
-      link.setAttribute("aria-label", label);
-      link.title = label;
-      link.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10Z"></path></svg>';
-    } else {
-      link.textContent = label;
+    }
+    const page = window.location.pathname.split("/").pop() || "index.html";
+    if (href.includes("?") ? href === page + window.location.search : href === page) {
+      link.classList.add("is-current");
+      link.setAttribute("aria-current", "page");
     }
     return link;
   }
+
+  function setUpNavToggle() {
+    const toggle = document.querySelector(".nav-toggle");
+    const header = document.querySelector(".site-header");
+    if (!toggle || !header) return;
+    const backdrop = document.createElement("div");
+    backdrop.className = "nav-backdrop";
+    header.append(backdrop);
+    const narrow = window.matchMedia("(max-width: 900px)");
+    // Collapsed links show only icons, so give each one a hover label.
+    document.querySelectorAll(".main-nav a").forEach((link) => { link.title = link.textContent.trim(); });
+    const setOpen = (open) => {
+      document.body.classList.toggle("nav-open", open);
+      toggle.setAttribute("aria-expanded", String(open));
+      toggle.setAttribute("aria-label", open ? "Close menu" : "Open menu");
+    };
+    const setCollapsed = (collapsed) => {
+      document.body.classList.toggle("sidebar-collapsed", collapsed);
+      try { localStorage.setItem("sidebarCollapsed", collapsed ? "1" : "0"); } catch {}
+      syncToggle();
+    };
+    const syncToggle = () => {
+      if (narrow.matches) {
+        setOpen(document.body.classList.contains("nav-open"));
+      } else {
+        const collapsed = document.body.classList.contains("sidebar-collapsed");
+        toggle.setAttribute("aria-expanded", String(!collapsed));
+        toggle.setAttribute("aria-label", collapsed ? "Expand menu" : "Collapse menu");
+      }
+    };
+    try { document.body.classList.toggle("sidebar-collapsed", localStorage.getItem("sidebarCollapsed") === "1"); } catch {}
+    syncToggle();
+    // Animate only clicks, not the saved state being restored on page load.
+    requestAnimationFrame(() => requestAnimationFrame(() => document.body.classList.add("sidebar-ready")));
+    narrow.addEventListener("change", () => { setOpen(false); syncToggle(); });
+    toggle.addEventListener("click", () => {
+      if (narrow.matches) setOpen(!document.body.classList.contains("nav-open"));
+      else setCollapsed(!document.body.classList.contains("sidebar-collapsed"));
+    });
+    backdrop.addEventListener("click", () => setOpen(false));
+    document.querySelector(".main-nav").addEventListener("click", (event) => {
+      if (event.target.closest("a")) setOpen(false);
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && document.body.classList.contains("nav-open")) {
+        setOpen(false);
+        toggle.focus();
+      }
+    });
+  }
+
+  setUpNavToggle();
 
   window.PitstopApi = {
     ApiError,
