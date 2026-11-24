@@ -160,12 +160,14 @@
     form.elements.lengthMm.value = product.lengthMm ?? "";
     form.elements.releaseDate.value = product.releaseDate || "";
     galleryItems = product.gallery.map((photo) => ({ ...photo }));
+    linkItems = (product.links || []).map((link) => ({ ...link }));
+    renderLinkEditor();
     Object.keys(trays).forEach(clearTray);
     renderPhotoEditors();
     document.querySelector("#product-form-title").textContent = `Edit ${product.name}`;
     submitButton.textContent = "Save changes";
-    cancelEdit.hidden = false;
-    form.scrollIntoView({ behavior: "smooth", block: "start" });
+    form.elements.available.checked = product.available !== false;
+    openProductDialog();
   }
 
   async function loadProducts() {
@@ -260,52 +262,267 @@
     });
   });
 
-  function renderProducts() {
-    productList.replaceChildren();
-    products.forEach((product) => {
-      const row = document.createElement("article");
-      row.className = "admin-product-row";
-      const thumb = element("div", "admin-product-thumb");
-      if (product.image) {
-        const image = element("img");
-        image.src = product.image;
-        image.alt = "";
-        image.loading = "lazy";
-        thumb.append(image);
-      } else {
-        thumb.textContent = product.make.slice(0, 2).toUpperCase();
-      }
-      const details = element("div", "admin-product-details");
-      const name = element("h3", "", product.name);
-      const meta = element("p", "", `${product.make} · ${product.scale} · ${product.category}`);
-      details.append(name, meta);
-      const price = element("strong", "admin-product-price", formatPrice(product.price));
-      const stockLabel = product.stock === 0 ? "Sold out" : `${product.stock} in stock`;
-      const stockClass = product.stock === 0 ? "sold-out" : product.stock <= 2 ? "low" : "ok";
-      const stock = element("span", `stock-pill stock-${stockClass}`, stockLabel);
+  // ---- Quick status controls on each product row ----
+  const QUICK_TAGS = [["newArrival", "New"], ["bestSeller", "Best seller"], ["chase", "Chase"]];
+  const stockTimers = new Map();
 
-      const actions = document.createElement("div");
-      actions.className = "admin-row-actions";
-      const edit = document.createElement("button");
-      edit.type = "button";
-      edit.className = "secondary-button";
-      edit.dataset.edit = product.id;
-      edit.textContent = "Edit";
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = "secondary-button";
-      remove.dataset.delete = product.id;
-      remove.textContent = "Delete";
-      actions.append(edit, remove);
-      row.append(thumb, details, price, stock, actions);
-      productList.append(row);
+  function productStatus(product) {
+    if (product.preorder) return "preorder";
+    return product.stock > 0 ? "instock" : "soldout";
+  }
+
+  function quickControls(product) {
+    const box = element("div", "quick-controls");
+    box.dataset.quickId = product.id;
+
+    const statusLabel = element("label", "quick-status");
+    const status = element("select");
+    status.dataset.quickStatus = "";
+    status.setAttribute("aria-label", `Status of ${product.name}`);
+    [["instock", "In stock"], ["soldout", "Sold out"], ["preorder", "Pre-order"]].forEach(([value, text]) => {
+      const option = element("option", "", text);
+      option.value = value;
+      status.append(option);
     });
-    document.querySelector("#product-count").textContent = `${products.length} ${products.length === 1 ? "product" : "products"}`;
-    if (!products.length) {
-      const empty = document.createElement("p");
-      empty.textContent = "No products have been added yet.";
-      productList.append(empty);
+    status.value = productStatus(product);
+    status.className = `status-${status.value}`;
+    statusLabel.append(element("span", "", "Status"), status);
+
+    const stock = element("div", "quick-stock");
+    stock.setAttribute("role", "group");
+    stock.setAttribute("aria-label", `Stock of ${product.name}`);
+    const minus = element("button", "", "−");
+    minus.type = "button";
+    minus.dataset.quickStep = "-1";
+    minus.setAttribute("aria-label", "One less in stock");
+    minus.disabled = product.stock <= 0;
+    const input = element("input");
+    input.type = "number";
+    input.min = "0";
+    input.max = "1000000";
+    input.step = "1";
+    input.value = product.stock;
+    input.dataset.quickStock = "";
+    input.setAttribute("aria-label", "Units in stock");
+    const plus = element("button", "", "+");
+    plus.type = "button";
+    plus.dataset.quickStep = "1";
+    plus.setAttribute("aria-label", "One more in stock");
+    stock.append(minus, input, plus);
+
+    const tags = element("div", "quick-tags");
+    QUICK_TAGS.forEach(([field, text]) => {
+      const tag = element("button", "quick-tag", text);
+      tag.type = "button";
+      tag.dataset.quickToggle = field;
+      tag.setAttribute("aria-pressed", String(Boolean(product[field])));
+      tags.append(tag);
+    });
+
+    // The big on/off switch: off hides the product from the shop without deleting it.
+    const on = product.available !== false;
+    const toggle = element("button", "avail-switch");
+    toggle.type = "button";
+    toggle.dataset.quickToggle = "available";
+    toggle.setAttribute("role", "switch");
+    toggle.setAttribute("aria-checked", String(on));
+    toggle.setAttribute("aria-label", `${product.name} is available in the shop`);
+    const track = element("span", "avail-track");
+    track.append(element("span", "avail-knob"));
+    toggle.append(track, element("span", "avail-label", on ? "Available" : "Not available"));
+
+    const note = element("span", "quick-note");
+    note.setAttribute("aria-live", "polite");
+    box.append(toggle, statusLabel, stock, tags, note);
+    return box;
+  }
+
+  function showQuickNote(productId, text, tone) {
+    const note = productList.querySelector(`[data-quick-id="${CSS.escape(productId)}"] .quick-note`);
+    if (!note) return;
+    note.textContent = text;
+    note.className = `quick-note${tone ? ` is-${tone}` : ""}`;
+    if (tone === "ok") window.setTimeout(() => { if (note.textContent === text) note.textContent = ""; }, 4000);
+  }
+
+  async function quickSave(productId, changes) {
+    showQuickNote(productId, "Saving…", "");
+    try {
+      const result = await window.PitstopApi.request(`/api/admin/products/${encodeURIComponent(productId)}/quick`, {
+        method: "PATCH",
+        body: JSON.stringify(changes),
+      });
+      const index = products.findIndex((entry) => entry.id === productId);
+      if (index >= 0) products[index] = { ...result.product };
+      replaceProductRow(products[index]);
+      syncOpenForm(products[index]);
+      const waiting = result.waitingNotified || 0;
+      let note = "Saved ✓";
+      if ("available" in changes) {
+        note = changes.available ? "Saved ✓ It's back in the shop." : "Saved ✓ Hidden from the shop. Customers can't see or buy it.";
+      }
+      if (waiting) note += ` ${waiting} waiting ${waiting === 1 ? "customer" : "customers"} will see it's available.`;
+      showQuickNote(productId, note, "ok");
+      // A product hidden or shown may no longer match the current filter.
+      if ("available" in changes && productFilter.value !== "all") renderProducts();
+      loadDashboard().catch(() => {});
+    } catch (error) {
+      // Put the row back the way the server has it, then say why.
+      replaceProductRow(products.find((entry) => entry.id === productId));
+      showQuickNote(productId, `Not saved: ${error.message}`, "error");
     }
+  }
+
+  // If the full edit form is open on this product, keep its fields in step.
+  function syncOpenForm(product) {
+    if (!product || !idField.readOnly || idField.value !== product.id) return;
+    form.elements.stock.value = product.stock;
+    form.elements.preorder.checked = product.preorder;
+    form.elements.bestSeller.checked = product.bestSeller;
+    form.elements.newArrival.checked = product.newArrival;
+    form.elements.chase.checked = product.chase;
+    form.elements.available.checked = product.available !== false;
+  }
+
+  function replaceProductRow(product) {
+    if (!product) return;
+    const old = productList.querySelector(`[data-product-row="${CSS.escape(product.id)}"]`);
+    if (old) old.replaceWith(productRow(product));
+  }
+
+  productList.addEventListener("change", (event) => {
+    const box = event.target.closest("[data-quick-id]");
+    if (!box) return;
+    const id = box.dataset.quickId;
+    const product = products.find((entry) => entry.id === id);
+    if (event.target.matches("[data-quick-status]")) {
+      const value = event.target.value;
+      if (value === "soldout") quickSave(id, { preorder: false, stock: 0 });
+      else if (value === "preorder") quickSave(id, { preorder: true });
+      // Back in stock needs at least one on the shelf.
+      else quickSave(id, { preorder: false, stock: Math.max(1, product.stock) });
+    } else if (event.target.matches("[data-quick-stock]")) {
+      window.clearTimeout(stockTimers.get(id));
+      const stock = Number(event.target.value);
+      if (!Number.isInteger(stock) || stock < 0) {
+        replaceProductRow(product);
+        showQuickNote(id, "Stock must be a whole number, 0 or more.", "error");
+        return;
+      }
+      if (stock !== product.stock) quickSave(id, { stock });
+    }
+  });
+
+  productList.addEventListener("click", (event) => {
+    const box = event.target.closest("[data-quick-id]");
+    if (!box) return;
+    const id = box.dataset.quickId;
+    const product = products.find((entry) => entry.id === id);
+    const toggle = event.target.closest("[data-quick-toggle]");
+    if (toggle) {
+      const field = toggle.dataset.quickToggle;
+      const next = field === "available" ? product.available === false : !product[field];
+      toggle.setAttribute(toggle.getAttribute("role") === "switch" ? "aria-checked" : "aria-pressed", String(next));
+      quickSave(id, { [field]: next });
+      return;
+    }
+    const step = event.target.closest("[data-quick-step]");
+    if (step) {
+      // Taps on − / + add up, then save once the clicking stops.
+      const input = box.querySelector("[data-quick-stock]");
+      const next = Math.max(0, (Number(input.value) || 0) + Number(step.dataset.quickStep));
+      input.value = next;
+      box.querySelector('[data-quick-step="-1"]').disabled = next <= 0;
+      window.clearTimeout(stockTimers.get(id));
+      stockTimers.set(id, window.setTimeout(() => {
+        if (next !== product.stock) quickSave(id, { stock: next });
+      }, 600));
+    }
+  });
+
+  function productRow(product) {
+    const row = document.createElement("article");
+    row.className = "admin-product-row";
+    row.dataset.productRow = product.id;
+    fillProductRow(row, product);
+    return row;
+  }
+
+  const productSearch = document.querySelector("#product-search");
+  const productFilter = document.querySelector("#product-filter");
+  const PRODUCT_FILTERS = {
+    all: () => true,
+    available: (product) => product.available !== false,
+    hidden: (product) => product.available === false,
+    instock: (product) => product.stock > 0 && !product.preorder,
+    low: (product) => product.stock > 0 && product.stock <= 2 && !product.preorder,
+    soldout: (product) => product.stock === 0 && !product.preorder,
+    preorder: (product) => product.preorder,
+  };
+
+  function renderProducts() {
+    const term = productSearch.value.trim().toLowerCase();
+    const matches = products.filter((product) =>
+      PRODUCT_FILTERS[productFilter.value](product)
+      && `${product.name} ${product.make} ${product.id} ${product.category}`.toLowerCase().includes(term));
+    productList.replaceChildren(...matches.map(productRow));
+    const hidden = products.filter((product) => product.available === false).length;
+    const total = `${products.length} ${products.length === 1 ? "product" : "products"}${hidden ? ` · ${hidden} hidden` : ""}`;
+    document.querySelector("#product-count").textContent = matches.length === products.length
+      ? total : `Showing ${matches.length} of ${total}`;
+    if (!products.length) {
+      productList.append(element("p", "dashboard-empty", "No products yet. Click “+ Add product” to list your first model."));
+    } else if (!matches.length) {
+      productList.append(element("p", "dashboard-empty", "No products match. Try a different search or filter."));
+    }
+  }
+
+  productSearch.addEventListener("input", renderProducts);
+  productFilter.addEventListener("change", renderProducts);
+
+  function fillProductRow(row, product) {
+    const thumb = element("div", "admin-product-thumb");
+    if (product.image) {
+      const image = element("img");
+      image.src = product.image;
+      image.alt = "";
+      image.loading = "lazy";
+      thumb.append(image);
+    } else {
+      thumb.textContent = product.make.slice(0, 2).toUpperCase();
+    }
+    const details = element("div", "admin-product-details");
+    const name = element("h3", "", product.name);
+    const meta = element("p", "", `${product.make} · ${product.scale} · ${product.category}`);
+    details.append(name, meta);
+    const price = element("strong", "admin-product-price", formatPrice(product.price));
+    let stockLabel = product.stock === 0 ? "Sold out" : `${product.stock} in stock`;
+    let stockClass = product.stock === 0 ? "sold-out" : product.stock <= 2 ? "low" : "ok";
+    if (product.preorder) {
+      stockLabel = "Pre-order";
+      stockClass = "preorder";
+    }
+    if (product.available === false) {
+      stockLabel = "Hidden from shop";
+      stockClass = "hidden";
+    }
+    row.classList.toggle("is-hidden", product.available === false);
+    const stock = element("span", `stock-pill stock-${stockClass}`, stockLabel);
+
+    const actions = document.createElement("div");
+    actions.className = "admin-row-actions";
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "secondary-button";
+    edit.dataset.edit = product.id;
+    edit.textContent = "Edit all details";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "secondary-button";
+    remove.dataset.delete = product.id;
+    remove.textContent = "Delete";
+    actions.append(edit, remove);
+    row.append(thumb, details, price, stock, quickControls(product), actions);
   }
 
   // ---- Photo uploads ----
@@ -559,6 +776,83 @@
     }
   }
 
+  // ---- Videos & links ----
+  const MAX_LINKS = 10;
+  const linkEditor = document.querySelector("#link-editor");
+  const addLinkButton = document.querySelector("#add-link");
+  let linkItems = [];
+
+  function linkKind(url) {
+    const value = url.trim();
+    if (!value) return { text: "", tone: "" };
+    if (!/^https:\/\/[^/\s]+\.[^/\s]+/i.test(value)) return { text: "Start with https://", tone: "bad" };
+    if (/^https:\/\/(www\.|m\.)?(youtube\.com|youtu\.be)\//i.test(value)) return { text: "▶ YouTube video", tone: "video" };
+    if (/^https:\/\/(www\.)?vimeo\.com\/\d+/i.test(value)) return { text: "▶ Vimeo video", tone: "video" };
+    return { text: "Link", tone: "link" };
+  }
+
+  function updateLinkBadge(row, url) {
+    const badge = row.querySelector(".link-kind");
+    const kind = linkKind(url);
+    badge.textContent = kind.text;
+    badge.className = `link-kind${kind.tone ? ` is-${kind.tone}` : ""}`;
+  }
+
+  function renderLinkEditor() {
+    linkEditor.replaceChildren(...linkItems.map((item, index) => {
+      const row = element("li", "link-editor-item");
+      const url = element("input");
+      url.type = "url";
+      url.placeholder = "https://www.youtube.com/watch?v=… or any web address";
+      url.maxLength = 500;
+      url.value = item.url;
+      url.dataset.linkUrl = index;
+      url.setAttribute("aria-label", `Web address ${index + 1}`);
+      const title = element("input");
+      title.type = "text";
+      title.placeholder = "Title (optional), e.g. Unboxing review";
+      title.maxLength = 100;
+      title.value = item.title;
+      title.dataset.linkTitle = index;
+      title.setAttribute("aria-label", `Title for link ${index + 1}`);
+      const badge = element("span", "link-kind");
+      const remove = element("button", "upload-remove", "×");
+      remove.type = "button";
+      remove.dataset.linkRemove = index;
+      remove.setAttribute("aria-label", `Remove link ${index + 1}`);
+      const fields = element("div", "link-editor-fields");
+      fields.append(url, title);
+      row.append(fields, badge, remove);
+      updateLinkBadge(row, item.url);
+      return row;
+    }));
+    if (!linkItems.length) linkEditor.append(element("li", "editor-empty", "No videos or links yet."));
+    addLinkButton.disabled = linkItems.length >= MAX_LINKS;
+  }
+
+  addLinkButton.addEventListener("click", () => {
+    if (linkItems.length >= MAX_LINKS) return;
+    linkItems.push({ url: "", title: "" });
+    renderLinkEditor();
+    linkEditor.querySelector(`[data-link-url="${linkItems.length - 1}"]`).focus();
+  });
+  linkEditor.addEventListener("input", (event) => {
+    const { linkUrl, linkTitle } = event.target.dataset;
+    if (linkUrl !== undefined) {
+      linkItems[Number(linkUrl)].url = event.target.value;
+      updateLinkBadge(event.target.closest("li"), event.target.value);
+    } else if (linkTitle !== undefined) {
+      linkItems[Number(linkTitle)].title = event.target.value;
+    }
+  });
+  linkEditor.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-link-remove]");
+    if (!button) return;
+    linkItems.splice(Number(button.dataset.linkRemove), 1);
+    renderLinkEditor();
+  });
+  renderLinkEditor();
+
   function renderPhotoEditors() {
     const mainSrc = imageField.value.trim();
     const preview = document.querySelector("#main-preview");
@@ -627,6 +921,8 @@
   function resetForm() {
     form.reset();
     galleryItems = [];
+    linkItems = [];
+    renderLinkEditor();
     uploadStatus.textContent = "";
     renderPhotoEditors();
     CHOICE_KEYS.forEach(syncNewChoice);
@@ -634,9 +930,43 @@
     idField.readOnly = false;
     document.querySelector("#product-form-title").textContent = "Add a product";
     submitButton.textContent = "Add product";
-    cancelEdit.hidden = true;
     formMessage.textContent = "";
+    formDirty = false;
   }
+
+  // ---- Add / edit popup ----
+  const productDialog = document.querySelector("#product-dialog");
+  let formDirty = false;
+
+  function openProductDialog() {
+    formDirty = false;
+    if (!productDialog.open) productDialog.showModal();
+    productDialog.querySelector(".dialog-body").scrollTop = 0;
+    (idField.readOnly ? form.elements.name : idField).focus();
+  }
+
+  // Closing throws away unsaved changes, so ask first if there are any.
+  function closeProductDialog() {
+    if (formDirty && !window.confirm("Close without saving your changes?")) return;
+    productDialog.close();
+  }
+
+  form.addEventListener("input", () => { formDirty = true; });
+  form.addEventListener("change", () => { formDirty = true; });
+  productDialog.addEventListener("close", resetForm);
+  productDialog.addEventListener("cancel", (event) => {
+    event.preventDefault(); // Esc goes through the same check as the × button.
+    closeProductDialog();
+  });
+  // A click on the dark backdrop (outside the form) also closes.
+  productDialog.addEventListener("click", (event) => {
+    if (event.target === productDialog) closeProductDialog();
+  });
+  document.querySelector("#dialog-close").addEventListener("click", closeProductDialog);
+  document.querySelector("#add-product").addEventListener("click", () => {
+    resetForm();
+    openProductDialog();
+  });
 
   async function initialize() {
     const user = await window.PitstopApi.getUser();
@@ -721,6 +1051,7 @@
       price: Number(values.get("price")),
       stock: Number(values.get("stock")),
       bestSeller: form.elements.bestSeller.checked,
+      available: form.elements.available.checked,
       newArrival: form.elements.newArrival.checked,
       condition: choiceValue("condition"),
       image: values.get("image"),
@@ -732,6 +1063,8 @@
       lengthMm: optionalNumber(values.get("lengthMm")),
       releaseDate: values.get("releaseDate") || "",
       gallery: galleryItems.map(({ src, label }) => ({ src, label: label.trim() })),
+      // Empty rows are skipped rather than rejected.
+      links: linkItems.filter((link) => link.url.trim()).map((link) => ({ url: link.url.trim(), title: link.title.trim() })),
     };
     if (!editing) payload.id = values.get("id");
     try {
@@ -739,7 +1072,8 @@
         editing ? `/api/admin/products/${encodeURIComponent(idField.value)}` : "/api/admin/products",
         { method: editing ? "PATCH" : "POST", body: JSON.stringify(payload) },
       );
-      resetForm();
+      formDirty = false;
+      productDialog.close();
       const waiting = result.waitingNotified || 0;
       productsMessage.textContent = editing ? "Product updated." : "Product added.";
       if (waiting) {
@@ -772,5 +1106,5 @@
     }
   });
 
-  cancelEdit.addEventListener("click", resetForm);
+  cancelEdit.addEventListener("click", closeProductDialog);
 })();

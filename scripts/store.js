@@ -352,6 +352,9 @@
   // Typical 1:1 car length, used when the admin hasn't entered a model length.
   const REAL_CAR_MM = 4500;
   const COMMON_SCALES = [18, 24, 32, 43, 64];
+  // Phones only have room for the biggest and smallest common scales next to this one.
+  const PHONE_SCALES = [18, 64];
+  const narrowScreen = window.matchMedia("(max-width: 600px)");
 
   function scaleRatio(product) {
     const match = /1\s*[:/]\s*(\d{1,3})/.exec(product.scale || "");
@@ -374,7 +377,8 @@
     section.hidden = !ratio;
     if (!ratio) return;
     const thisMm = product.lengthMm || Math.round(REAL_CAR_MM / ratio);
-    const scales = [...new Set([...COMMON_SCALES, ratio])].sort((a, b) => a - b);
+    const shown = narrowScreen.matches ? PHONE_SCALES : COMMON_SCALES;
+    const scales = [...new Set([...shown, ratio])].sort((a, b) => a - b);
     const items = [
       { kind: "phone", mm: 71, heightMm: 147, label: "Phone", size: "14.7 cm tall" },
       { kind: "coin", mm: 24, heightMm: 24, label: "Coin", size: "2.4 cm" },
@@ -407,6 +411,110 @@
   }
 
 
+  // ---- Videos & links about the model ----
+
+  // Turns a YouTube or Vimeo address into a player address; anything else stays a link.
+  function videoFor(url) {
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return null;
+    }
+    const host = parsed.hostname.replace(/^(www|m|music)\./, "");
+    const youTubeId = /^[A-Za-z0-9_-]{11}$/;
+    let id = "";
+    if (host === "youtu.be") id = parsed.pathname.slice(1).split("/")[0];
+    else if (host === "youtube.com" || host === "youtube-nocookie.com") {
+      id = parsed.searchParams.get("v") || (/^\/(shorts|embed|live)\/([^/]+)/.exec(parsed.pathname) || [])[2] || "";
+    }
+    if (youTubeId.test(id)) {
+      return {
+        site: "YouTube",
+        embed: `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0`,
+        thumb: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+      };
+    }
+    const vimeo = host === "vimeo.com" && /^\/(\d+)/.exec(parsed.pathname);
+    if (vimeo) return { site: "Vimeo", embed: `https://player.vimeo.com/video/${vimeo[1]}?autoplay=1`, thumb: "" };
+    return null;
+  }
+
+  function siteName(url) {
+    try {
+      return new URL(url).hostname.replace(/^www\./, "");
+    } catch {
+      return url;
+    }
+  }
+
+  // "Mini GT" + "MINIGT #1218" -> "MINIGT #1218"; "Mini GT" + "Skyline" -> "Mini GT Skyline".
+  function searchQuery(product) {
+    const squash = (value) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+    return squash(product.name).includes(squash(product.make)) ? product.name : `${product.make} ${product.name}`;
+  }
+
+  const PLAY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 5.5v13l11-6.5z"></path></svg>';
+  const LINK_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8.5"></circle><path d="M3.5 12h17M12 3.5c2.5 2.6 3.6 5.4 3.6 8.5s-1.1 5.9-3.6 8.5c-2.5-2.6-3.6-5.4-3.6-8.5s1.1-5.9 3.6-8.5Z"></path></svg>';
+
+  function renderResources(product) {
+    const section = document.querySelector("#resources-section");
+    if (!section) return;
+    section.hidden = !product;
+    if (!product) return;
+    const links = product.links || [];
+    // The page redraws on every bag change; don't cut off a video that's playing.
+    const key = JSON.stringify([product.id, product.name, product.make, links]);
+    if (section.dataset.renderedFor === key) return;
+    section.dataset.renderedFor = key;
+    const videos = [];
+    const pages = [];
+    links.forEach((link) => {
+      const video = videoFor(link.url);
+      if (video) videos.push({ ...link, video });
+      else pages.push(link);
+    });
+    const query = searchQuery(product);
+    const outbound = 'target="_blank" rel="noopener noreferrer nofollow"';
+    section.innerHTML = `
+      <div class="section-heading">
+        <div><p class="eyebrow">LEARN MORE</p><h2 id="resources-heading">Videos &amp; links</h2></div>
+      </div>
+      ${videos.length ? `<div class="video-grid">${videos.map((item) => `
+        <div class="video-card">
+          <button type="button" class="video-poster${item.video.thumb ? "" : " no-thumb"}" data-video-embed="${escapeHtml(item.video.embed)}" data-video-title="${escapeHtml(item.title || `${item.video.site} video`)}" aria-label="Play ${escapeHtml(item.title || `${item.video.site} video`)}">
+            ${item.video.thumb ? `<img src="${escapeHtml(item.video.thumb)}" alt="" loading="lazy">` : ""}
+            <span class="video-play">${PLAY_ICON}</span>
+          </button>
+          <p class="video-title"><strong>${escapeHtml(item.title || `${item.video.site} video`)}</strong><span>${escapeHtml(item.video.site)}</span></p>
+        </div>`).join("")}</div>` : ""}
+      ${pages.length ? `<div class="link-grid">${pages.map((link) => `
+        <a class="link-card" href="${escapeHtml(link.url)}" ${outbound}>
+          <span class="link-icon">${LINK_ICON}</span>
+          <span class="link-text"><strong>${escapeHtml(link.title || siteName(link.url))}</strong><small>${escapeHtml(siteName(link.url))} ↗</small></span>
+        </a>`).join("")}</div>` : ""}
+      <div class="search-links">
+        <span>${links.length ? "Find even more:" : "Find reviews, photos, and videos of this model:"}</span>
+        <a class="search-chip search-youtube" href="https://www.youtube.com/results?search_query=${encodeURIComponent(query)}" ${outbound}>${PLAY_ICON}Search YouTube</a>
+        <a class="search-chip" href="https://www.google.com/search?q=${encodeURIComponent(query)}" ${outbound}>${LINK_ICON}Search Google</a>
+      </div>`;
+  }
+
+  function playVideo(poster) {
+    const frame = document.createElement("iframe");
+    frame.src = poster.dataset.videoEmbed;
+    frame.title = poster.dataset.videoTitle;
+    frame.allow = "autoplay; encrypted-media; picture-in-picture; fullscreen";
+    frame.allowFullscreen = true;
+    frame.referrerPolicy = "strict-origin-when-cross-origin";
+    frame.className = "video-frame";
+    poster.replaceWith(frame);
+  }
+
+  narrowScreen.addEventListener("change", () => {
+    if (productDetail) renderProductDetail();
+  });
+
   function renderProductDetail() {
     if (!productDetail) return;
     const id = new URLSearchParams(window.location.search).get("id");
@@ -416,6 +524,7 @@
       crumb.textContent = "Not found";
       productDetail.innerHTML = '<div class="detail-missing"><h1>We couldn’t find that model.</h1><p>It may have sold out and been removed from the shop.</p><a class="primary-link" href="diecast.html">Browse all diecast cars →</a></div>';
       renderScaleSection(null);
+      renderResources(null);
       return;
     }
     document.title = `${product.name} | PitStop.co`;
@@ -455,6 +564,7 @@
         ${alertNote(product)}
       </div>`;
     renderScaleSection(product);
+    renderResources(product);
 
     const related = products
       .filter((entry) => entry.id !== product.id)
@@ -841,6 +951,11 @@
     const wishButtonElement = event.target.closest("[data-wish]");
     if (wishButtonElement) {
       toggleWish(wishButtonElement);
+      return;
+    }
+    const poster = event.target.closest("[data-video-embed]");
+    if (poster) {
+      playVideo(poster);
       return;
     }
     const alertButton = event.target.closest("[data-alert]");

@@ -1,4 +1,5 @@
 import io
+import os
 import tempfile
 import unittest
 from contextlib import closing
@@ -6,7 +7,12 @@ from pathlib import Path
 
 from werkzeug.security import generate_password_hash
 
-import app as storefront
+# Importing the app sets up its database straight away, so point it at a
+# throwaway file first. Otherwise the tests would change the shop's real data.
+_IMPORT_DIR = tempfile.TemporaryDirectory()
+os.environ["PITSTOP_DATABASE"] = str(Path(_IMPORT_DIR.name) / "import.sqlite3")
+
+import app as storefront  # noqa: E402
 
 
 class StorefrontTests(unittest.TestCase):
@@ -351,6 +357,83 @@ class StorefrontTests(unittest.TestCase):
         product.update(id="other", make="Tarmac Works")
         saved = self.request_with_csrf("POST", "/api/admin/products", json=product).get_json()["product"]
         self.assertEqual(saved["make"], "Tarmac Works")
+
+    def test_product_videos_and_links(self):
+        self.sign_in_admin()
+        links = [
+            {"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "title": "Unboxing"},
+            {"url": "https://minigt.tsm-models.com/index.php?action=product-detail&id=1218", "title": ""},
+        ]
+        self.assertEqual(self.admin_product("midnight-gt", links=links).status_code, 200)
+        saved = next(p for p in self.client.get("/api/products").get_json()["products"] if p["id"] == "midnight-gt")
+        self.assertEqual(saved["links"], links)
+        for bad in (
+            [{"url": "javascript:alert(1)", "title": ""}],
+            [{"url": "http://example.com", "title": ""}],
+            [{"url": "https://localhost", "title": ""}],
+            [{"url": "https://example.com/a b", "title": ""}],
+            [{"url": "https://example.com", "title": "x" * 101}],
+            [{"url": "https://example.com"}] * 11,
+        ):
+            self.assertEqual(self.admin_product("midnight-gt", links=bad).status_code, 400, bad[0])
+        policy = self.client.get("/product.html").headers["Content-Security-Policy"]
+        self.assertIn("frame-src https://www.youtube-nocookie.com https://player.vimeo.com", policy)
+        self.assertIn("frame-ancestors 'none'", policy)
+
+    def test_quick_status_update(self):
+        quick = lambda body: self.request_with_csrf("PATCH", "/api/admin/products/apex-track/quick", json=body)
+        self.register_customer()
+        self.request_with_csrf("PUT", "/api/alerts/apex-track")
+        self.assertEqual(quick({"stock": 5}).status_code, 403)
+        self.request_with_csrf("POST", "/api/logout", json={})
+        self.refresh_csrf()
+        self.sign_in_admin()
+        response = quick({"stock": 5, "bestSeller": True})
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertEqual((body["product"]["stock"], body["product"]["bestSeller"]), (5, True))
+        self.assertEqual(body["waitingNotified"], 1)
+        # Everything else is left alone.
+        self.assertEqual(body["product"]["name"], "Example racing car")
+        self.assertEqual(quick({"preorder": True}).get_json()["product"]["preorder"], True)
+        self.assertEqual(quick({"stock": -1}).status_code, 400)
+        self.assertEqual(quick({"name": "Renamed"}).status_code, 400)
+        self.assertEqual(quick({}).status_code, 400)
+        self.assertEqual(
+            self.request_with_csrf("PATCH", "/api/admin/products/no-such/quick", json={"stock": 1}).status_code, 404
+        )
+
+    def test_unavailable_product_is_hidden_from_shop(self):
+        self.register_customer()
+        self.request_with_csrf("PUT", "/api/cart/midnight-gt", json={"quantity": 1})
+        self.request_with_csrf("PUT", "/api/wishlist/midnight-gt")
+        self.request_with_csrf("POST", "/api/logout", json={})
+        self.refresh_csrf()
+
+        self.sign_in_admin()
+        quick = lambda body: self.request_with_csrf("PATCH", "/api/admin/products/midnight-gt/quick", json=body)
+        self.assertFalse(quick({"available": False}).get_json()["product"]["available"])
+        ids = [p["id"] for p in self.client.get("/api/products").get_json()["products"]]
+        self.assertNotIn("midnight-gt", ids)
+        # The admin still sees it, so it can be switched back on.
+        admin_ids = [p["id"] for p in self.client.get("/api/admin/products").get_json()["products"]]
+        self.assertIn("midnight-gt", admin_ids)
+        self.request_with_csrf("POST", "/api/logout", json={})
+        self.refresh_csrf()
+
+        self.request_with_csrf("POST", "/api/login", json={"email": "collector@example.com", "password": "correct horse 7"})
+        self.refresh_csrf()
+        self.assertEqual(self.client.get("/api/cart").get_json()["items"], [])
+        self.assertEqual(self.client.get("/api/wishlist").get_json()["items"], [])
+        self.assertEqual(self.request_with_csrf("PUT", "/api/cart/midnight-gt", json={"quantity": 1}).status_code, 404)
+        self.request_with_csrf("POST", "/api/logout", json={})
+        self.refresh_csrf()
+
+        self.request_with_csrf("POST", "/api/login", json={"email": "admin@example.com", "password": "correct horse 7"})
+        self.refresh_csrf()
+        quick({"available": True})
+        ids = [p["id"] for p in self.client.get("/api/products").get_json()["products"]]
+        self.assertIn("midnight-gt", ids)
 
     def test_reset_password_command(self):
         self.register_customer()
