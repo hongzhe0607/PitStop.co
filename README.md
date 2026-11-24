@@ -26,7 +26,7 @@ PitStop.co is a Python-powered storefront with public product browsing, customer
    python app.py create-admin
    ```
 
-   Follow the prompts to create the admin login. Admins can add, edit, and remove product listings and adjust stock. Other registrations always receive the customer role, whatever the sign-up form sends.
+   Follow the prompts to create the admin login. If you forget a password, run `python app.py reset-password` the same way, enter the account's email, and choose a new password. Admins can add, edit, and remove product listings and adjust stock. Other registrations always receive the customer role, whatever the sign-up form sends.
 
 When `PITSTOP_SECRET_KEY` is not set, the app generates a session key once and stores it in `instance/secret_key`, so sign-ins survive restarts. To supply your own key instead, set `PITSTOP_SECRET_KEY` before starting the app. Generate a key with `python -c "import secrets; print(secrets.token_hex(32))"` and keep it private. For a hosted deployment, also set `PITSTOP_ENV=production`, use a strong private `PITSTOP_SECRET_KEY`, and serve the app over HTTPS. If the host puts the app behind a reverse proxy or load balancer, also set `PITSTOP_TRUST_PROXY=1` so sign-in rate limits apply per visitor instead of to the proxy's address; leave it unset when visitors connect directly. Do not use Flask's built-in development server as a public production server.
 

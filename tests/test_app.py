@@ -305,6 +305,20 @@ class StorefrontTests(unittest.TestCase):
         ):
             self.assertEqual(self.admin_product("midnight-gt", **bad).status_code, 400, bad)
 
+    def test_reset_password_command(self):
+        self.register_customer()
+        from unittest import mock
+        with mock.patch("builtins.input", return_value="Collector@Example.com"), \
+                mock.patch.object(storefront, "getpass", return_value="brand new pass 9"), \
+                mock.patch("builtins.print"):
+            storefront.reset_password()
+        self.request_with_csrf("POST", "/api/logout", json={})
+        self.refresh_csrf()
+        old = self.request_with_csrf("POST", "/api/login", json={"email": "collector@example.com", "password": "correct horse 7"})
+        self.assertEqual(old.status_code, 401)
+        new = self.request_with_csrf("POST", "/api/login", json={"email": "collector@example.com", "password": "brand new pass 9"})
+        self.assertEqual(new.status_code, 200)
+
     def test_older_database_gains_collector_columns(self):
         with closing(storefront.connect_db()) as db, db:
             db.executescript(

@@ -1122,13 +1122,41 @@ def create_admin():
     print("Administrator account created.")
 
 
+def reset_password():
+    """Set a new password for an existing account from the command line."""
+    init_db()
+    email = input("Account email: ").strip().lower()
+    with closing(connect_db()) as db, db:
+        user = db.execute("SELECT id FROM users WHERE email = ? COLLATE NOCASE", (email,)).fetchone()
+        if user is None:
+            raise SystemExit("No account uses that email address.")
+        password = getpass("New password (10+ characters): ")
+        confirmation = getpass("Confirm new password: ")
+        if len(password) < 10 or len(password) > 128:
+            raise SystemExit("The password must be between 10 and 128 characters.")
+        if password != confirmation:
+            raise SystemExit("Passwords did not match.")
+        db.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (generate_password_hash(password), user["id"]),
+        )
+        # A reset also lifts any sign-in lockout from earlier wrong guesses.
+        db.execute("DELETE FROM login_attempts")
+    print("Password updated. You can sign in with the new password now.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run or administer the PitStop.co storefront.")
-    parser.add_argument("command", nargs="?", choices=("run", "create-admin"), default="run")
+    parser.add_argument(
+        "command", nargs="?", choices=("run", "create-admin", "reset-password"), default="run"
+    )
     arguments = parser.parse_args()
     init_db()
     if arguments.command == "create-admin":
         create_admin()
+        return
+    if arguments.command == "reset-password":
+        reset_password()
         return
     app.run(host="127.0.0.1", port=int(os.environ.get("PORT", "5000")), debug=False)
 

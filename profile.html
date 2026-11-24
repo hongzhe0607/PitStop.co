@@ -27,34 +27,65 @@
       </nav>
     </header>
     <main>
-      <section class="account-page">
-        <p class="eyebrow">YOUR ACCOUNT</p>
-        <h1>My profile.</h1>
-        <p class="account-intro">Update the name shown on your account. Your email address is used to sign in.</p>
-        <form class="account-form" id="profile-form">
-          <label for="name">Your name</label>
-          <input id="name" name="name" type="text" autocomplete="name" maxlength="80" required>
-          <label for="email">Email address</label>
-          <input id="email" name="email" type="email" autocomplete="email" readonly>
-          <p class="profile-role" id="profile-role"></p>
-          <p class="form-message" id="form-message" role="status"></p>
-          <button class="primary-link account-submit" type="submit">Save profile</button>
-        </form>
-        <p id="admin-shortcut" hidden><a href="admin.html">Open the shop dashboard →</a></p>
-        <section class="my-alerts" id="alerts" aria-labelledby="my-alerts-heading">
-          <h2 id="my-alerts-heading">My alerts</h2>
-          <p class="profile-role">Sold-out and pre-order models you asked us to watch for you.</p>
-          <p class="form-message" id="alerts-message" role="status"></p>
-          <ul class="alert-list" id="my-alert-list"></ul>
-        </section>
-        <section class="my-orders" aria-labelledby="my-orders-heading">
-          <h2 id="my-orders-heading">My orders</h2>
-          <p class="form-message" id="orders-message" role="status"></p>
-          <div id="my-order-list"></div>
-        </section>
-        <div class="profile-actions">
-          <button class="secondary-button" id="profile-signout" type="button">Sign out</button>
-          <p class="form-message" id="signout-message" role="status" aria-live="polite"></p>
+      <section class="profile-page">
+        <header class="profile-hero">
+          <div class="profile-avatar" id="profile-avatar" aria-hidden="true"></div>
+          <div class="profile-identity">
+            <p class="profile-kicker">YOUR GARAGE</p>
+            <h1 id="profile-heading">My profile</h1>
+            <p class="profile-meta"><span id="profile-email-label"></span><span class="role-pill" id="profile-role"></span></p>
+          </div>
+          <div class="profile-hero-actions">
+            <a class="hero-action hero-action-solid" id="admin-shortcut" href="admin.html" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="4" y="4" width="7" height="7" rx="1.5"></rect><rect x="13" y="4" width="7" height="7" rx="1.5"></rect><rect x="4" y="13" width="7" height="7" rx="1.5"></rect><rect x="13" y="13" width="7" height="7" rx="1.5"></rect></svg>
+              Shop dashboard
+            </a>
+            <button class="hero-action" id="profile-signout" type="button">Sign out</button>
+          </div>
+          <p class="form-message profile-signout-message" id="signout-message" role="status" aria-live="polite"></p>
+        </header>
+
+        <ul class="profile-stats" aria-label="Account summary">
+          <li><a href="#orders"><strong id="stat-orders">–</strong><span>Orders</span></a></li>
+          <li><a href="#alerts"><strong id="stat-alerts">–</strong><span>Alerts</span></a></li>
+          <li><a href="diecast.html?saved=1"><strong id="stat-saved">–</strong><span>Saved models</span></a></li>
+        </ul>
+
+        <div class="profile-grid">
+          <section class="profile-card" aria-labelledby="details-heading">
+            <div class="profile-card-heading">
+              <h2 id="details-heading">Account details</h2>
+              <p>Your email address is used to sign in.</p>
+            </div>
+            <form class="account-form profile-form" id="profile-form">
+              <label for="name">Your name</label>
+              <input id="name" name="name" type="text" autocomplete="name" maxlength="80" required>
+              <label for="email">Email address</label>
+              <input id="email" name="email" type="email" autocomplete="email" readonly>
+              <p class="form-message" id="form-message" role="status"></p>
+              <button class="primary-link account-submit" type="submit">Save changes</button>
+            </form>
+          </section>
+
+          <div class="profile-stack">
+            <section class="profile-card" id="alerts" aria-labelledby="my-alerts-heading">
+              <div class="profile-card-heading">
+                <h2 id="my-alerts-heading">My alerts</h2>
+                <p>Sold-out and pre-order models we're watching for you.</p>
+              </div>
+              <p class="form-message" id="alerts-message" role="status"></p>
+              <ul class="alert-list" id="my-alert-list"></ul>
+            </section>
+
+            <section class="profile-card" id="orders" aria-labelledby="my-orders-heading">
+              <div class="profile-card-heading">
+                <h2 id="my-orders-heading">My orders</h2>
+                <p>The shop contacts you about payment and shipping.</p>
+              </div>
+              <p class="form-message" id="orders-message" role="status"></p>
+              <div class="profile-orders" id="my-order-list"></div>
+            </section>
+          </div>
         </div>
       </section>
     </main>
