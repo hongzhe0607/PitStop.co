@@ -26,7 +26,8 @@
     const method = (options.method || "GET").toUpperCase();
     const headers = new Headers(options.headers || {});
     headers.set("Accept", "application/json");
-    if (options.body) headers.set("Content-Type", "application/json");
+    // FormData (file uploads) sets its own multipart Content-Type.
+    if (options.body && !(options.body instanceof FormData)) headers.set("Content-Type", "application/json");
     if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
       if (!csrfToken) {
         const response = await fetch("/api/csrf");

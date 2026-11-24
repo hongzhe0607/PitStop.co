@@ -33,7 +33,6 @@ PRODUCT_FIELDS = {
 # Collector details. All optional so older clients and catalog files keep working.
 PRODUCT_EXTRA_DEFAULTS = {
     "gallery": [],
-    "spin": [],
     "editionSize": None,
     "chase": False,
     "releaseDate": "",
@@ -42,7 +41,6 @@ PRODUCT_EXTRA_DEFAULTS = {
 }
 PRODUCT_EXTRA_COLUMNS = {
     "gallery": "TEXT NOT NULL DEFAULT '[]'",
-    "spin_frames": "TEXT NOT NULL DEFAULT '[]'",
     "edition_size": "INTEGER",
     "chase": "INTEGER NOT NULL DEFAULT 0",
     "release_date": "TEXT NOT NULL DEFAULT ''",
@@ -50,7 +48,6 @@ PRODUCT_EXTRA_COLUMNS = {
     "length_mm": "INTEGER",
 }
 MAX_GALLERY_PHOTOS = 12
-MAX_SPIN_FRAMES = 72
 ORDER_STATUSES = ("pending", "confirmed", "shipped", "completed", "cancelled")
 ORDER_TRANSITIONS = {
     "pending": {"confirmed", "cancelled"},
@@ -110,7 +107,8 @@ app.config.update(
 @app.after_request
 def set_security_headers(response):
     response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; img-src 'self' https:; style-src 'self'; "
+        # blob: lets the admin page preview a photo on this computer before it uploads.
+        "default-src 'self'; img-src 'self' https: blob:; style-src 'self'; "
         "script-src 'self'; form-action 'self'; base-uri 'self'; "
         "object-src 'none'; frame-ancestors 'none'"
     )
@@ -209,6 +207,9 @@ def init_db():
         for column, definition in PRODUCT_EXTRA_COLUMNS.items():
             if column not in existing_columns:
                 db.execute(f"ALTER TABLE products ADD COLUMN {column} {definition}")
+        if "spin_frames" in existing_columns:
+            # The 360° photo spin was removed.
+            db.execute("ALTER TABLE products DROP COLUMN spin_frames")
         if ADMIN_EMAILS:
             placeholders = ", ".join("?" for _ in ADMIN_EMAILS)
             db.execute(
@@ -226,7 +227,7 @@ def init_db():
 PRODUCT_COLUMNS = (
     "id", "name", "make", "scale", "category", "price", "stock", "best_seller",
     "new_arrival", "condition", "image", "image_alt", "description",
-    "gallery", "spin_frames", "edition_size", "chase", "release_date", "preorder", "length_mm",
+    "gallery", "edition_size", "chase", "release_date", "preorder", "length_mm",
 )
 
 
@@ -237,7 +238,7 @@ def product_row(product):
         product["category"], product["price"], product["stock"],
         int(product["bestSeller"]), int(product["newArrival"]), product["condition"],
         product["image"], product["imageAlt"], product["description"],
-        json.dumps(product["gallery"]), json.dumps(product["spin"]),
+        json.dumps(product["gallery"]),
         product["editionSize"], int(product["chase"]), product["releaseDate"],
         int(product["preorder"]), product["lengthMm"],
     )
@@ -293,7 +294,6 @@ def product_payload(row):
         "imageAlt": row["image_alt"],
         "description": row["description"],
         "gallery": json.loads(row["gallery"]),
-        "spin": json.loads(row["spin_frames"]),
         "editionSize": row["edition_size"],
         "chase": bool(row["chase"]),
         "releaseDate": row["release_date"],
@@ -347,17 +347,6 @@ def validate_collector_details(data, values):
         if not src or not is_valid_image_path(src):
             return "Gallery photos must be HTTPS URLs or paths in the images folder."
         values["gallery"].append({"src": src, "label": photo.get("label", "").strip()})
-
-    spin = data.get("spin", [])
-    if not isinstance(spin, list) or len(spin) > MAX_SPIN_FRAMES:
-        return f"Use up to {MAX_SPIN_FRAMES} photos for the 360° view."
-    values["spin"] = []
-    for frame in spin:
-        if not isinstance(frame, str) or len(frame) > 500 or not is_valid_image_path(frame.strip()):
-            return "360° photos must be HTTPS URLs or paths in the images folder."
-        values["spin"].append(frame.strip())
-    if len(values["spin"]) == 1:
-        return "The 360° view needs at least 2 photos."
 
     values["editionSize"], ok = optional_whole_number(data.get("editionSize"), 1, 1_000_000)
     if not ok:
@@ -1032,6 +1021,34 @@ def admin_list_products():
     return jsonify(products=[product_payload(row) for row in rows])
 
 
+def choice_key(value):
+    """'minigt', 'Mini-GT' and 'MINI GT' share a key; so do '1:64' and '1:64 scale'."""
+    return re.sub(r"[^a-z0-9:]", "", value.lower().replace("scale", ""))
+
+
+def use_existing_spellings(product, exclude_id=None):
+    """Reuse the shop's existing spelling for brand, category, scale, and condition."""
+    catalog = json.loads(CATALOG_FILE.read_text(encoding="utf-8"))
+    known = {
+        "make": list(catalog.get("brands", [])),
+        "category": list(catalog.get("categories", [])),
+        "scale": [],
+        "condition": [],
+    }
+    for row in get_db().execute(
+        "SELECT make, category, scale, condition FROM products WHERE id IS NOT ?", (exclude_id,)
+    ):
+        for field in known:
+            known[field].append(row[field])
+    for field, values in known.items():
+        key = choice_key(product[field])
+        if not key:
+            continue
+        match = next((value for value in values if choice_key(value) == key), None)
+        if match:
+            product[field] = match
+
+
 @app.post("/api/admin/products")
 @require_admin
 def admin_create_product():
@@ -1039,6 +1056,7 @@ def admin_create_product():
     product, error = validate_product(data)
     if error:
         return jsonify(error=error), 400
+    use_existing_spellings(product)
     try:
         get_db().execute(
             f"INSERT INTO products ({', '.join(PRODUCT_COLUMNS)}) "
@@ -1058,6 +1076,8 @@ def admin_update_product(product_id):
     product, error = validate_product(data, product_id)
     if error:
         return jsonify(error=error), 400
+    # Leave this product out, so its own old spelling can still be corrected.
+    use_existing_spellings(product, exclude_id=product_id)
     db = get_db()
     before = db.execute("SELECT stock, preorder FROM products WHERE id = ?", (product_id,)).fetchone()
     if before is None:
@@ -1081,6 +1101,52 @@ def admin_update_product(product_id):
     ready = product["stock"] > 0 and not product["preorder"]
     # Customers on the list now see "Back in stock" or "Out now" in their alerts.
     return jsonify(product=product, waitingNotified=waiting if ready and not was_ready else 0)
+
+
+UPLOADS = IMAGES / "uploads"
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+# Recognised by their first bytes, never by the file name the browser sends.
+# SVG is left out on purpose: it can carry scripts.
+IMAGE_SIGNATURES = (
+    (b"\xff\xd8\xff", "jpg"),
+    (b"\x89PNG\r\n\x1a\n", "png"),
+    (b"GIF87a", "gif"),
+    (b"GIF89a", "gif"),
+)
+
+
+def detect_image_type(head):
+    for signature, extension in IMAGE_SIGNATURES:
+        if head.startswith(signature):
+            return extension
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+@app.post("/api/admin/uploads")
+@require_admin
+def admin_upload_image():
+    # Photos are much larger than the JSON limit that guards every other endpoint.
+    request.max_content_length = MAX_UPLOAD_BYTES + 64 * 1024
+    upload = request.files.get("photo")
+    if upload is None or not upload.filename:
+        return jsonify(error="Choose a photo to upload."), 400
+    data = upload.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        return jsonify(error="That photo is over 10 MB. Use a smaller one."), 413
+    extension = detect_image_type(data[:16])
+    if extension is None:
+        return jsonify(error="Upload a JPG, PNG, WebP, or GIF photo."), 400
+    UPLOADS.mkdir(parents=True, exist_ok=True)
+    filename = f"{datetime.now(timezone.utc):%Y%m%d}-{secrets.token_hex(8)}.{extension}"
+    (UPLOADS / filename).write_bytes(data)
+    return jsonify(path=f"images/uploads/{filename}"), 201
+
+
+@app.errorhandler(413)
+def too_large(_error):
+    return jsonify(error="That file is too large."), 413
 
 
 @app.delete("/api/admin/products/<product_id>")

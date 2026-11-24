@@ -32,7 +32,6 @@
   let alerts = new Map();
   let galleryIndex = 0;
   let galleryProductId = null;
-  let spinFrame = 0;
   let brands = [];
   let categories = [];
   let currentUser = null;
@@ -260,13 +259,12 @@
     writeCatalogParams();
   }
 
-  // ---- Product page: gallery, 360° spin, rarity, alerts, scale ----
+  // ---- Product page: gallery, rarity, alerts, scale ----
 
   function galleryViews(product) {
     const views = [];
-    if (product.image) views.push({ type: "image", src: product.image, label: product.imageAlt || "Main photo" });
-    (product.gallery || []).forEach((photo) => views.push({ type: "image", src: photo.src, label: photo.label }));
-    if ((product.spin || []).length >= 2) views.push({ type: "spin", src: product.spin[0], label: "360° view" });
+    if (product.image) views.push({ src: product.image, label: product.imageAlt || "Main photo" });
+    (product.gallery || []).forEach((photo) => views.push({ src: photo.src, label: photo.label }));
     return views;
   }
 
@@ -275,7 +273,6 @@
     if (galleryProductId !== product.id) {
       galleryProductId = product.id;
       galleryIndex = 0;
-      spinFrame = 0;
     }
     galleryIndex = Math.min(galleryIndex, Math.max(0, views.length - 1));
     const view = views[galleryIndex];
@@ -283,24 +280,18 @@
     let main;
     if (!view) {
       main = imageMarkup(product);
-    } else if (view.type === "spin") {
-      const frames = product.spin.length;
-      main = `<div class="spin-viewer" tabindex="0" role="slider" aria-label="Rotate ${name}. Use the arrow keys or drag." aria-valuemin="1" aria-valuemax="${frames}" aria-valuenow="${spinFrame + 1}" aria-valuetext="Angle ${Math.round((spinFrame / frames) * 360)}°">
-          <img class="product-image spin-image" src="${escapeHtml(product.spin[spinFrame])}" alt="${name}, rotating view" draggable="false">
-          <span class="spin-hint" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3"></path><path d="M18 3v4h-4M6 21v-4h4"></path></svg>Drag to spin</span>
-        </div>`;
     } else {
       main = `<button class="zoom-frame" type="button" data-zoom aria-label="Zoom in on ${escapeHtml(view.label || product.name)}">
           <img class="product-image" src="${escapeHtml(view.src)}" alt="${escapeHtml(view.label || product.name)}" draggable="false">
           <span class="zoom-hint" aria-hidden="true">Tap to zoom</span>
         </button>`;
     }
-    const caption = view && view.type === "image" && galleryIndex > 0 && view.label
+    const caption = view && galleryIndex > 0 && view.label
       ? `<p class="media-caption">${escapeHtml(view.label)}</p>` : "";
     const thumbs = views.length > 1
       ? `<div class="gallery-thumbs" role="group" aria-label="Photos of ${name}">${views.map((entry, index) => `
-          <button type="button" class="gallery-thumb${entry.type === "spin" ? " is-spin" : ""}" data-gallery="${index}" aria-pressed="${index === galleryIndex}" aria-label="${escapeHtml(entry.label || `Photo ${index + 1}`)}">
-            <img src="${escapeHtml(entry.src)}" alt="" loading="lazy">${entry.type === "spin" ? "<span>360°</span>" : ""}
+          <button type="button" class="gallery-thumb" data-gallery="${index}" aria-pressed="${index === galleryIndex}" aria-label="${escapeHtml(entry.label || `Photo ${index + 1}`)}">
+            <img src="${escapeHtml(entry.src)}" alt="" loading="lazy">
           </button>`).join("")}</div>`
       : "";
     return `<div class="detail-gallery">
@@ -415,22 +406,6 @@
     });
   }
 
-  function setSpinFrame(viewer, frame) {
-    const product = products.find((entry) => entry.id === galleryProductId);
-    if (!product || !product.spin.length) return;
-    const frames = product.spin.length;
-    spinFrame = ((frame % frames) + frames) % frames;
-    viewer.querySelector(".spin-image").src = product.spin[spinFrame];
-    viewer.setAttribute("aria-valuenow", String(spinFrame + 1));
-    viewer.setAttribute("aria-valuetext", `Angle ${Math.round((spinFrame / frames) * 360)}°`);
-  }
-
-  const preloadedSpins = new Set();
-  function preloadSpin(product) {
-    if (preloadedSpins.has(product.id)) return;
-    preloadedSpins.add(product.id);
-    (product.spin || []).forEach((src) => { const image = new Image(); image.src = src; });
-  }
 
   function renderProductDetail() {
     if (!productDetail) return;
@@ -480,7 +455,6 @@
         ${alertNote(product)}
       </div>`;
     renderScaleSection(product);
-    preloadSpin(product);
 
     const related = products
       .filter((entry) => entry.id !== product.id)
@@ -914,42 +888,9 @@
   }
 
   if (productDetail) {
-    let spinDrag = null;
     productDetail.addEventListener("pointermove", (event) => {
       const frame = event.target.closest(".zoom-frame.is-zoomed");
       if (frame) moveZoom(frame, event);
-      if (spinDrag && spinDrag.id === event.pointerId) {
-        // One frame per 10px of drag; dragging right turns the car right.
-        const steps = Math.round((event.clientX - spinDrag.x) / 10);
-        if (steps !== 0) {
-          setSpinFrame(spinDrag.viewer, spinFrame - steps);
-          spinDrag.x = event.clientX;
-        }
-      }
-    });
-    productDetail.addEventListener("pointerdown", (event) => {
-      const viewer = event.target.closest(".spin-viewer");
-      if (!viewer || event.button !== 0) return;
-      event.preventDefault();
-      viewer.focus();
-      viewer.setPointerCapture(event.pointerId);
-      viewer.classList.add("is-dragging");
-      spinDrag = { id: event.pointerId, x: event.clientX, viewer };
-    });
-    const endSpin = (event) => {
-      if (!spinDrag || spinDrag.id !== event.pointerId) return;
-      spinDrag.viewer.classList.remove("is-dragging");
-      spinDrag = null;
-    };
-    productDetail.addEventListener("pointerup", endSpin);
-    productDetail.addEventListener("pointercancel", endSpin);
-    productDetail.addEventListener("keydown", (event) => {
-      const viewer = event.target.closest(".spin-viewer");
-      if (!viewer) return;
-      const step = { ArrowLeft: 1, ArrowRight: -1, ArrowUp: -1, ArrowDown: 1 }[event.key];
-      if (step === undefined && event.key !== "Home") return;
-      event.preventDefault();
-      setSpinFrame(viewer, event.key === "Home" ? 0 : spinFrame + step);
     });
   }
 

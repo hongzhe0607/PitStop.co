@@ -1,3 +1,4 @@
+import io
 import tempfile
 import unittest
 from contextlib import closing
@@ -14,6 +15,7 @@ class StorefrontTests(unittest.TestCase):
         storefront.DATABASE = Path(self.temp_dir.name) / "test.sqlite3"
         # The shop's own catalog starts empty, so tests seed demo listings from a fixture.
         storefront.CATALOG_FILE = Path(__file__).with_name("catalog.json")
+        storefront.UPLOADS = Path(self.temp_dir.name) / "uploads"
         storefront.init_db()
         storefront.app.config.update(TESTING=True)
         self.client = storefront.app.test_client()
@@ -285,18 +287,16 @@ class StorefrontTests(unittest.TestCase):
             chase=True,
             lengthMm=190,
             gallery=[{"src": "images/wheels.jpg", "label": "Wheels"}],
-            spin=["images/spin-1.jpg", "https://example.com/spin-2.jpg"],
         )
         self.assertEqual(response.status_code, 200)
         saved = next(p for p in self.client.get("/api/products").get_json()["products"] if p["id"] == "midnight-gt")
         self.assertEqual(saved["editionSize"], 3000)
         self.assertTrue(saved["chase"])
         self.assertEqual(saved["gallery"], [{"src": "images/wheels.jpg", "label": "Wheels"}])
-        self.assertEqual(len(saved["spin"]), 2)
+        self.assertNotIn("spin", saved)
         for bad in (
             {"gallery": [{"src": "photos/x.jpg", "label": ""}]},
-            {"spin": ["images/only-one.jpg"]},
-            {"spin": ["http://example.com/a.jpg", "images/b.jpg"]},
+            {"spin": ["images/a.jpg", "images/b.jpg"]},  # the 360° spin was removed
             {"editionSize": 0},
             {"editionSize": True},
             {"lengthMm": 5},
@@ -304,6 +304,53 @@ class StorefrontTests(unittest.TestCase):
             {"chase": "yes"},
         ):
             self.assertEqual(self.admin_product("midnight-gt", **bad).status_code, 400, bad)
+
+    def upload(self, data, filename="car.png"):
+        return self.request_with_csrf(
+            "POST", "/api/admin/uploads",
+            data={"photo": (io.BytesIO(data), filename)},
+            content_type="multipart/form-data",
+        )
+
+    def test_admin_uploads_photo(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 200_000  # bigger than the 64 KB JSON limit
+        self.register_customer()
+        self.assertEqual(self.upload(png).status_code, 403)
+        self.request_with_csrf("POST", "/api/logout", json={})
+        self.refresh_csrf()
+        self.sign_in_admin()
+        response = self.upload(png, "../../evil.png")
+        self.assertEqual(response.status_code, 201)
+        path = response.get_json()["path"]
+        self.assertRegex(path, r"^images/uploads/\d{8}-[0-9a-f]{16}\.png$")
+        self.assertTrue((storefront.UPLOADS / path.rsplit("/", 1)[1]).exists())
+        _, error = storefront.validate_product({
+            "name": "T", "make": "M", "scale": "1:64", "category": "C", "price": 1, "stock": 1,
+            "bestSeller": False, "newArrival": False, "condition": "New", "image": path,
+            "imageAlt": "", "description": "D",
+        }, "t")
+        self.assertIsNone(error)
+        # Content decides, not the name: a script renamed to .jpg is refused.
+        self.assertEqual(self.upload(b"<svg onload=alert(1)>", "car.jpg").status_code, 400)
+        self.assertEqual(self.upload(b"\xff\xd8\xff" + b"\x00" * (11 * 1024 * 1024)).status_code, 413)
+
+    def test_brand_spelling_matches_existing(self):
+        self.sign_in_admin()
+        product = {
+            "id": "skyline", "name": "Skyline", "make": "minigt", "scale": "1:64",
+            "category": "sport", "price": 30, "stock": 1, "bestSeller": False,
+            "newArrival": False, "condition": "new", "image": "", "imageAlt": "", "description": "D",
+        }
+        response = self.request_with_csrf("POST", "/api/admin/products", json=product)
+        saved = response.get_json()["product"]
+        self.assertEqual(
+            (saved["make"], saved["category"], saved["scale"], saved["condition"]),
+            ("Mini GT", "Sport", "1:64", "New"),
+        )
+        # A brand nobody has used yet is kept as typed.
+        product.update(id="other", make="Tarmac Works")
+        saved = self.request_with_csrf("POST", "/api/admin/products", json=product).get_json()["product"]
+        self.assertEqual(saved["make"], "Tarmac Works")
 
     def test_reset_password_command(self):
         self.register_customer()
@@ -337,7 +384,7 @@ class StorefrontTests(unittest.TestCase):
             )
         storefront.init_db()
         [product] = self.client.get("/api/products").get_json()["products"]
-        self.assertEqual((product["gallery"], product["spin"], product["preorder"]), ([], [], False))
+        self.assertEqual((product["gallery"], product["preorder"]), ([], False))
 
 
 if __name__ == "__main__":

@@ -27,10 +27,6 @@
     if (window.location.hash !== `#${tab}`) history.replaceState(null, "", `#${tab}`);
   }
 
-  function lines(value) {
-    return String(value || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  }
-
   function optionalNumber(value) {
     return value === null || String(value).trim() === "" ? null : Number(value);
   }
@@ -152,9 +148,10 @@
     if (!product) return;
     idField.value = product.id;
     idField.readOnly = true;
-    for (const key of ["name", "make", "scale", "category", "price", "stock", "condition", "image", "imageAlt", "description"]) {
+    for (const key of ["name", "price", "stock", "image", "imageAlt", "description"]) {
       form.elements[key].value = product[key];
     }
+    CHOICE_KEYS.forEach((key) => setChoice(key, product[key]));
     form.elements.bestSeller.checked = product.bestSeller;
     form.elements.newArrival.checked = product.newArrival;
     form.elements.chase.checked = product.chase;
@@ -162,9 +159,9 @@
     form.elements.editionSize.value = product.editionSize ?? "";
     form.elements.lengthMm.value = product.lengthMm ?? "";
     form.elements.releaseDate.value = product.releaseDate || "";
-    form.elements.gallery.value = product.gallery
-      .map((photo) => (photo.label ? `${photo.src} | ${photo.label}` : photo.src)).join("\n");
-    form.elements.spin.value = product.spin.join("\n");
+    galleryItems = product.gallery.map((photo) => ({ ...photo }));
+    Object.keys(trays).forEach(clearTray);
+    renderPhotoEditors();
     document.querySelector("#product-form-title").textContent = `Edit ${product.name}`;
     submitButton.textContent = "Save changes";
     cancelEdit.hidden = false;
@@ -172,10 +169,96 @@
   }
 
   async function loadProducts() {
-    const result = await window.PitstopApi.request("/api/admin/products");
+    const [result, catalog] = await Promise.all([
+      window.PitstopApi.request("/api/admin/products"),
+      window.PitstopApi.request("/api/products"),
+    ]);
     products = result.products;
     renderProducts();
+    loadChoices(catalog);
   }
+
+  // ---- Dropdowns for brand, category, scale, and condition ----
+  // One spelling per value keeps filters and "Shop by brand" tidy.
+  const CHOICE_KEYS = ["make", "category", "scale", "condition"];
+  const NEW_CHOICE = "__new__";
+  const CHOICE_NOUNS = { make: "brand", category: "category", scale: "scale", condition: "condition" };
+  const STARTER_CHOICES = {
+    make: [],
+    category: [],
+    scale: ["1:18 scale", "1:24 scale", "1:32 scale", "1:43 scale", "1:64 scale"],
+    condition: ["New", "New (box has wear)", "Pre-owned", "Loose (no box)"],
+  };
+  const choices = Object.fromEntries(CHOICE_KEYS.map((key) => [key, [...STARTER_CHOICES[key]]]));
+
+  // "minigt", "Mini-GT" and "MINI GT" all become "minigt"; "1:64" and "1:64 scale" match too.
+  function choiceKey(value) {
+    return String(value).toLowerCase().replace(/scale/g, "").replace(/[^a-z0-9:]/g, "");
+  }
+
+  function findChoice(key, value) {
+    return choices[key].find((entry) => choiceKey(entry) === choiceKey(value));
+  }
+
+  function addChoice(key, value) {
+    const clean = String(value || "").trim();
+    if (!clean || findChoice(key, clean)) return;
+    choices[key].push(clean);
+  }
+
+  function renderChoice(key) {
+    const select = form.elements[key];
+    const current = select.value;
+    const sorted = key === "scale"
+      ? [...choices.scale].sort((a, b) => (parseInt(a.split(":")[1], 10) || 0) - (parseInt(b.split(":")[1], 10) || 0))
+      : [...choices[key]].sort((a, b) => a.localeCompare(b));
+    const placeholder = element("option", "", `Choose a ${CHOICE_NOUNS[key]}…`);
+    placeholder.value = "";
+    const addNew = element("option", "", `+ Add a new ${CHOICE_NOUNS[key]}…`);
+    addNew.value = NEW_CHOICE;
+    select.replaceChildren(placeholder, ...sorted.map((value) => {
+      const option = element("option", "", value);
+      option.value = value;
+      return option;
+    }), addNew);
+    select.value = current && [...select.options].some((option) => option.value === current) ? current : "";
+    syncNewChoice(key);
+  }
+
+  function syncNewChoice(key) {
+    const input = form.elements[`${key}New`];
+    const adding = form.elements[key].value === NEW_CHOICE;
+    input.hidden = !adding;
+    input.required = adding;
+  }
+
+  function setChoice(key, value) {
+    addChoice(key, value);
+    renderChoice(key);
+    form.elements[key].value = findChoice(key, value) || "";
+    syncNewChoice(key);
+  }
+
+  function choiceValue(key) {
+    const selected = form.elements[key].value;
+    if (selected !== NEW_CHOICE) return selected;
+    const typed = form.elements[`${key}New`].value.trim();
+    return findChoice(key, typed) || typed; // Reuse the existing spelling if it already exists.
+  }
+
+  function loadChoices(catalog) {
+    (catalog.brands || []).forEach((value) => addChoice("make", value));
+    (catalog.categories || []).forEach((value) => addChoice("category", value));
+    products.forEach((product) => CHOICE_KEYS.forEach((key) => addChoice(key, product[key])));
+    CHOICE_KEYS.forEach(renderChoice);
+  }
+
+  CHOICE_KEYS.forEach((key) => {
+    form.elements[key].addEventListener("change", () => {
+      syncNewChoice(key);
+      if (form.elements[key].value === NEW_CHOICE) form.elements[`${key}New`].focus();
+    });
+  });
 
   function renderProducts() {
     productList.replaceChildren();
@@ -225,8 +308,329 @@
     }
   }
 
+  // ---- Photo uploads ----
+  const MAX_GALLERY = 12;
+  const MAX_EDGE = 1800;
+  const uploadStatus = document.querySelector("#upload-status");
+  const imageField = form.elements.image;
+  let galleryItems = [];
+  let uploading = false;
+
+  // Phone photos are often 4000px+ and several MB. Shrink them in the browser so
+  // the upload is quick and product pages stay fast. GIFs are left alone (animation).
+  async function shrinkPhoto(file) {
+    if (file.type === "image/gif" || !window.createImageBitmap) return file;
+    let bitmap;
+    try {
+      bitmap = await createImageBitmap(file);
+    } catch {
+      return file; // Let the server explain what it can't read.
+    }
+    const scale = Math.min(1, MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+    if (scale === 1 && file.size < 1.5 * 1024 * 1024) {
+      bitmap.close();
+      return file;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    const context = canvas.getContext("2d");
+    context.fillStyle = "#fff"; // Transparent PNGs become white, not black, as JPEG.
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.86));
+    return blob ? new File([blob], file.name.replace(/\.\w+$/, "") + ".jpg", { type: "image/jpeg" }) : file;
+  }
+
+  // Each upload shows as a tile: a preview straight away, a progress bar,
+  // then a green tick or a red cross with the reason and "Try again".
+  const trays = { main: [], gallery: [] };
+  let activeUploads = 0;
+  let trayItemId = 0;
+  let csrfToken = "";
+
+  async function getCsrfToken() {
+    if (!csrfToken) {
+      const response = await fetch("/api/csrf", { headers: { Accept: "application/json" } });
+      csrfToken = (await response.json()).token;
+    }
+    return csrfToken;
+  }
+
+  // XMLHttpRequest rather than fetch, because only XHR reports upload progress.
+  function sendPhoto(file, onProgress) {
+    return getCsrfToken().then((token) => new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/api/admin/uploads");
+      xhr.setRequestHeader("Accept", "application/json");
+      xhr.setRequestHeader("X-CSRF-Token", token);
+      xhr.upload.addEventListener("progress", (event) => {
+        if (event.lengthComputable) onProgress(event.loaded / event.total);
+      });
+      xhr.addEventListener("load", () => {
+        let data = {};
+        try { data = JSON.parse(xhr.responseText); } catch { /* handled below */ }
+        if (xhr.status >= 200 && xhr.status < 300 && data.path) resolve(data.path);
+        else if (xhr.status === 401 || xhr.status === 403) reject(new Error("You're signed out. Sign in again as an admin."));
+        else if (xhr.status === 413) reject(new Error("The photo is over 10 MB."));
+        else reject(new Error(data.error || `The server said no (error ${xhr.status}).`));
+      });
+      xhr.addEventListener("error", () => reject(new Error("Couldn't reach the shop. Is the app still running?")));
+      const body = new FormData();
+      body.append("photo", file);
+      xhr.send(body);
+    }));
+  }
+
+  function setUploading(change) {
+    activeUploads += change;
+    uploading = activeUploads > 0;
+    submitButton.disabled = uploading;
+    submitButton.title = uploading ? "Wait for the photos to finish uploading" : "";
+  }
+
+  async function runUpload(target, item) {
+    item.status = "uploading";
+    item.progress = 0;
+    item.error = "";
+    renderTray(target);
+    setUploading(1);
+    try {
+      const shrunk = await shrinkPhoto(item.file);
+      const path = await sendPhoto(shrunk, (fraction) => {
+        item.progress = fraction;
+        const bar = document.querySelector(`[data-tray-item="${item.id}"] .tray-progress i`);
+        if (bar) bar.style.width = `${Math.round(fraction * 100)}%`;
+      });
+      item.status = "done";
+      item.path = path;
+      // Skip if the form was cleared or switched to another product meanwhile.
+      if (trays[target].includes(item)) item.onDone(path);
+    } catch (error) {
+      item.status = "failed";
+      item.error = /\.(heic|heif)$/i.test(item.file.name)
+        ? "iPhone HEIC photos can't be used. Convert it to JPG first."
+        : error.message;
+    } finally {
+      setUploading(-1);
+      renderTray(target);
+      renderPhotoEditors();
+    }
+  }
+
+  function startUploads(target, files, onDoneFor, { replace = false } = {}) {
+    if (replace) clearTray(target);
+    const items = files.map((file, index) => ({
+      id: `u${++trayItemId}`,
+      file,
+      name: file.name,
+      preview: URL.createObjectURL(file),
+      status: "waiting",
+      progress: 0,
+      error: "",
+      onDone: onDoneFor(file, index),
+    }));
+    trays[target].push(...items);
+    renderTray(target);
+    // One at a time keeps a big batch from flooding the connection.
+    items.reduce((chain, item) => chain.then(() => runUpload(target, item)), Promise.resolve());
+  }
+
+  function clearTray(target) {
+    trays[target].forEach((item) => URL.revokeObjectURL(item.preview));
+    trays[target] = [];
+    renderTray(target);
+  }
+
+  function trayIcon(status) {
+    if (status === "done") return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>';
+    if (status === "failed") return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 7l10 10M17 7 7 17"></path></svg>';
+    return "";
+  }
+
+  function renderTray(target) {
+    const tray = form.querySelector(`[data-tray="${target}"]`);
+    const items = trays[target];
+    tray.hidden = !items.length;
+    if (!items.length) {
+      tray.replaceChildren();
+      return;
+    }
+    const done = items.filter((item) => item.status === "done").length;
+    const failed = items.filter((item) => item.status === "failed").length;
+    const busy = items.length - done - failed;
+    let summary;
+    if (busy) summary = `Uploading ${done + failed + 1} of ${items.length}…`;
+    else if (failed && done) summary = `${done} uploaded, ${failed} failed`;
+    else if (failed) summary = failed === 1 ? "Upload failed" : `${failed} uploads failed`;
+    else summary = done === 1 ? "Uploaded" : `All ${done} photos uploaded`;
+
+    const head = element("div", `tray-head${failed && !busy ? " has-failed" : !busy ? " is-done" : ""}`);
+    head.append(element("strong", "", summary));
+    if (!busy) {
+      const clear = element("button", "dash-link", "Dismiss");
+      clear.type = "button";
+      clear.dataset.trayClear = target;
+      head.append(clear);
+    }
+    const list = element("div", "tray-items");
+    items.forEach((item) => {
+      const tile = element("div", `tray-item is-${item.status}`);
+      tile.dataset.trayItem = item.id;
+      const thumb = element("div", "tray-thumb");
+      const image = element("img");
+      image.src = item.preview;
+      image.alt = "";
+      image.addEventListener("error", () => thumb.classList.add("no-preview"), { once: true });
+      thumb.append(image);
+      const badge = element("span", "tray-badge");
+      badge.innerHTML = trayIcon(item.status);
+      thumb.append(badge);
+      if (item.status === "uploading" || item.status === "waiting") {
+        const bar = element("span", "tray-progress");
+        const fill = element("i");
+        fill.style.width = `${Math.round(item.progress * 100)}%`;
+        bar.append(fill);
+        thumb.append(bar);
+      }
+      tile.append(thumb);
+      const text = element("div", "tray-text");
+      const stateText = {
+        waiting: "Waiting…",
+        uploading: "Uploading…",
+        done: "Uploaded ✓",
+        failed: item.error,
+      }[item.status];
+      text.append(element("strong", "", item.name), element("small", "", stateText));
+      if (item.status === "failed") {
+        const retry = element("button", "tray-retry", "Try again");
+        retry.type = "button";
+        retry.dataset.trayRetry = `${target}:${item.id}`;
+        text.append(retry);
+      }
+      tile.title = `${item.name}: ${stateText}`;
+      tile.append(text);
+      list.append(tile);
+    });
+    tray.replaceChildren(head, list);
+  }
+
+  form.addEventListener("click", (event) => {
+    const clear = event.target.closest("[data-tray-clear]");
+    if (clear) {
+      clearTray(clear.dataset.trayClear);
+      return;
+    }
+    const retry = event.target.closest("[data-tray-retry]");
+    if (retry) {
+      const [target, id] = retry.dataset.trayRetry.split(":");
+      const item = trays[target].find((entry) => entry.id === id);
+      if (item) runUpload(target, item);
+    }
+  });
+
+  function photoFiles(fileList) {
+    return [...fileList].filter((file) => file.type.startsWith("image/") || /\.(heic|heif)$/i.test(file.name));
+  }
+
+  function addPhotos(target, fileList) {
+    const files = photoFiles(fileList);
+    uploadStatus.textContent = "";
+    if (!files.length) {
+      uploadStatus.textContent = "Those files aren't photos. Use JPG, PNG, WebP, or GIF.";
+      return;
+    }
+    if (target === "main") {
+      startUploads("main", files.slice(0, 1), () => (path) => { imageField.value = path; }, { replace: true });
+    } else if (target === "gallery") {
+      const pending = trays.gallery.filter((item) => item.status === "waiting" || item.status === "uploading").length;
+      const room = MAX_GALLERY - galleryItems.length - pending;
+      if (room <= 0) {
+        uploadStatus.textContent = `The gallery is full (${MAX_GALLERY} photos). Remove one first.`;
+        return;
+      }
+      if (files.length > room) uploadStatus.textContent = `The gallery holds ${MAX_GALLERY} photos, so only the first ${room} were added.`;
+      startUploads("gallery", files.slice(0, room), (file) => (path) => {
+        // Start the label from the file name, e.g. "rear-wheels.jpg" -> "Rear wheels".
+        const label = file.name.replace(/\.\w+$/, "").replace(/[-_]+/g, " ").replace(/^\w/, (c) => c.toUpperCase()).slice(0, 60);
+        galleryItems.push({ src: path, label });
+      });
+    }
+  }
+
+  function renderPhotoEditors() {
+    const mainSrc = imageField.value.trim();
+    const preview = document.querySelector("#main-preview");
+    preview.hidden = !mainSrc;
+    document.querySelector("#main-empty").hidden = Boolean(mainSrc);
+    if (mainSrc) preview.querySelector("img").src = mainSrc.startsWith("http") ? mainSrc : `/${mainSrc.replace(/^\//, "")}`;
+
+    const gallery = document.querySelector("#gallery-editor");
+    gallery.replaceChildren(...galleryItems.map((item, index) => {
+      const row = element("li", "gallery-editor-item");
+      const image = element("img");
+      image.src = `/${item.src.replace(/^\//, "")}`.replace(/^\/https:/, "https:");
+      image.alt = "";
+      const label = element("input");
+      label.type = "text";
+      label.maxLength = 60;
+      label.placeholder = "Label, e.g. Wheels";
+      label.value = item.label;
+      label.dataset.galleryLabel = index;
+      label.setAttribute("aria-label", `Label for gallery photo ${index + 1}`);
+      const remove = element("button", "upload-remove", "×");
+      remove.type = "button";
+      remove.dataset.galleryRemove = index;
+      remove.setAttribute("aria-label", `Remove gallery photo ${index + 1}`);
+      row.append(image, label, remove);
+      return row;
+    }));
+    if (!galleryItems.length) gallery.append(element("li", "editor-empty", "No close-ups yet. Add photos or drop them here."));
+  }
+
+  form.addEventListener("change", (event) => {
+    const input = event.target.closest("[data-upload]");
+    if (!input) return;
+    addPhotos(input.dataset.upload, input.files);
+    input.value = "";
+  });
+  imageField.addEventListener("input", renderPhotoEditors);
+  document.querySelector("#main-remove").addEventListener("click", () => {
+    imageField.value = "";
+    renderPhotoEditors();
+  });
+  document.querySelector("#gallery-editor").addEventListener("input", (event) => {
+    const index = event.target.dataset.galleryLabel;
+    if (index !== undefined) galleryItems[Number(index)].label = event.target.value;
+  });
+  document.querySelector("#gallery-editor").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-gallery-remove]");
+    if (!button) return;
+    galleryItems.splice(Number(button.dataset.galleryRemove), 1);
+    renderPhotoEditors();
+  });
+  form.querySelectorAll("[data-drop]").forEach((zone) => {
+    zone.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      zone.classList.add("is-dragover");
+    });
+    zone.addEventListener("dragleave", () => zone.classList.remove("is-dragover"));
+    zone.addEventListener("drop", (event) => {
+      event.preventDefault();
+      zone.classList.remove("is-dragover");
+      addPhotos(zone.dataset.drop, event.dataTransfer.files);
+    });
+  });
+  renderPhotoEditors();
+
   function resetForm() {
     form.reset();
+    galleryItems = [];
+    uploadStatus.textContent = "";
+    renderPhotoEditors();
+    CHOICE_KEYS.forEach(syncNewChoice);
+    Object.keys(trays).forEach(clearTray);
     idField.readOnly = false;
     document.querySelector("#product-form-title").textContent = "Add a product";
     submitButton.textContent = "Add product";
@@ -311,14 +715,14 @@
     const editing = idField.readOnly;
     const payload = {
       name: values.get("name"),
-      make: values.get("make"),
-      scale: values.get("scale"),
-      category: values.get("category"),
+      make: choiceValue("make"),
+      scale: choiceValue("scale"),
+      category: choiceValue("category"),
       price: Number(values.get("price")),
       stock: Number(values.get("stock")),
       bestSeller: form.elements.bestSeller.checked,
       newArrival: form.elements.newArrival.checked,
-      condition: values.get("condition"),
+      condition: choiceValue("condition"),
       image: values.get("image"),
       imageAlt: values.get("imageAlt"),
       description: values.get("description"),
@@ -327,11 +731,7 @@
       editionSize: optionalNumber(values.get("editionSize")),
       lengthMm: optionalNumber(values.get("lengthMm")),
       releaseDate: values.get("releaseDate") || "",
-      gallery: lines(values.get("gallery")).map((line) => {
-        const [src, ...label] = line.split("|");
-        return { src: src.trim(), label: label.join("|").trim() };
-      }),
-      spin: lines(values.get("spin")),
+      gallery: galleryItems.map(({ src, label }) => ({ src, label: label.trim() })),
     };
     if (!editing) payload.id = values.get("id");
     try {

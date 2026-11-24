@@ -119,13 +119,25 @@
               <div class="admin-form-grid">
                 <label class="span-2">Product ID<input id="product-id" name="id" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required placeholder="e.g. mini-gt-skyline"></label>
                 <label class="span-2">Name<input name="name" required maxlength="120"></label>
-                <label>Brand<input name="make" required maxlength="80"></label>
-                <label>Category<input name="category" required maxlength="40"></label>
-                <label>Scale<input name="scale" required maxlength="40" placeholder="1:64 scale"></label>
-                <label>Condition<input name="condition" required maxlength="80"></label>
+                <div class="choice-field"><label for="choice-make">Brand</label><select id="choice-make" name="make" data-choice="make" required></select><input name="makeNew" class="choice-new" maxlength="80" placeholder="New brand name" aria-label="New brand name" hidden></div>
+                <div class="choice-field"><label for="choice-category">Category</label><select id="choice-category" name="category" data-choice="category" required></select><input name="categoryNew" class="choice-new" maxlength="40" placeholder="New category" aria-label="New category" hidden></div>
+                <div class="choice-field"><label for="choice-scale">Scale</label><select id="choice-scale" name="scale" data-choice="scale" required></select><input name="scaleNew" class="choice-new" maxlength="40" placeholder="e.g. 1:12 scale" aria-label="New scale" hidden></div>
+                <div class="choice-field"><label for="choice-condition">Condition</label><select id="choice-condition" name="condition" data-choice="condition" required></select><input name="conditionNew" class="choice-new" maxlength="80" placeholder="New condition" aria-label="New condition" hidden></div>
                 <label>Price (RM)<input name="price" type="number" min="0.01" step="0.01" required></label>
                 <label>Stock<input name="stock" type="number" min="0" step="1" required></label>
-                <label class="span-2">Photo<input name="image" type="text" maxlength="2000" placeholder="images/car.jpg or https://…"></label>
+                <div class="span-2 photo-field">
+                  <span class="photo-field-label">Main photo</span>
+                  <div class="upload-drop" id="main-drop" data-drop="main">
+                    <div class="upload-preview" id="main-preview" hidden><img alt=""><button type="button" class="upload-remove" id="main-remove" aria-label="Remove main photo">×</button></div>
+                    <div class="upload-empty" id="main-empty">
+                      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 16l4.5-4.5 3 3L16 10l4 4"></path><rect x="3" y="4" width="18" height="16" rx="2.5"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle></svg>
+                      <span><strong>Drop a photo here</strong> or</span>
+                    </div>
+                    <label class="upload-button">Choose photo<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" data-upload="main" class="sr-only"></label>
+                  </div>
+                  <details class="photo-link"><summary>Or use a link</summary><input name="image" type="text" maxlength="2000" placeholder="https://… or images/car.jpg"></details>
+                  <div class="upload-tray" data-tray="main" aria-live="polite" hidden></div>
+                </div>
                 <label class="span-2">Photo description<input name="imageAlt" maxlength="200"></label>
                 <label class="span-2">Description<textarea name="description" rows="3" required maxlength="500"></textarea></label>
               </div>
@@ -148,10 +160,16 @@
               </fieldset>
               <fieldset class="admin-fieldset">
                 <legend>Close-up photos <span>(optional)</span></legend>
-                <label>Gallery photos<textarea name="gallery" rows="3" placeholder="images/skyline-wheels.jpg | Wheels&#10;images/skyline-box.jpg | Box condition"></textarea></label>
-                <p class="admin-hint">One per line: photo, then <code>|</code>, then a short label. Up to 12.</p>
-                <label>360° spin photos<textarea name="spin" rows="3" placeholder="images/skyline-spin-01.jpg&#10;images/skyline-spin-02.jpg&#10;…"></textarea></label>
-                <p class="admin-hint">One photo per line, taken all the way around the car in order (24–36 photos look smooth). Up to 72.</p>
+                <div class="photo-field">
+                  <div class="photo-field-head">
+                    <span class="photo-field-label">Gallery photos</span>
+                    <label class="upload-button">Add photos<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple data-upload="gallery" class="sr-only"></label>
+                  </div>
+                  <ul class="gallery-editor" id="gallery-editor" data-drop="gallery"></ul>
+                  <div class="upload-tray" data-tray="gallery" aria-live="polite" hidden></div>
+                  <p class="admin-hint">Close-ups of wheels, interior, and the box. Give each one a short label. Up to 12.</p>
+                </div>
+                <p class="upload-status" id="upload-status" role="status" aria-live="polite"></p>
               </fieldset>
               <p class="form-message" id="form-message" role="status"></p>
               <div class="admin-form-actions">
