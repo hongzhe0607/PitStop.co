@@ -51,6 +51,17 @@ Replace the demo listings in `data/catalog.json` before first launch. After the 
 - **Badges and sorting**: cards show New, Best seller, Only N left!, and Sold out. The Diecast page sorts by featured, newest, price, or name, and its filters are kept in the link so a filtered view can be shared.
 - Animations are switched off for visitors whose device is set to reduce motion.
 
+## Collector features
+
+Set these in the admin product editor under **Collector details** and **Close-up photos**. All are optional.
+
+- **Restock alerts**: on a sold-out model, signed-in customers tap **Notify me when it's back**. When you give it stock again, their alert on the Profile page (**My alerts**) turns green and they see a "back in stock" message on their next visit. The site cannot send email itself. The **Waitlists** card on the dashboard lists who is waiting, with an **Email list** link that opens your mail app with them in BCC.
+- **Pre-orders**: tick **Pre-order** and set a **Release date**. The model can't go in a bag, and customers join the pre-order list instead. On release day, untick Pre-order and set the stock.
+- **Rarity**: **Edition size** shows "1 of 3,000". **Chase variant** adds a gold Chase badge. The Diecast page's Availability filter has **Pre-order** and **Limited & chase** options.
+- **Close-up gallery**: one photo per line as `images/file.jpg | Label` (for example `| Wheels` or `| Box condition`). Customers tap a photo to zoom in.
+- **360° spin**: one photo per line, taken in order all the way around the car (24–36 photos look smooth). Customers drag or use the arrow keys to turn it.
+- **Size check**: each product page draws the model next to a phone, a coin, and other common scales. The size comes from the scale (for example `1:24`) and a typical 4.5 m car. Enter **Model length (mm)** for an exact figure.
+
 ## Orders and the dashboard
 
 Signed-in customers check out from their bag with a name, phone number, shipping address, and optional note. Placing an order takes the items out of stock and empties the bag. Customers can follow their orders on the Profile page. The site does not take payment; the shop arranges payment and shipping with the customer.

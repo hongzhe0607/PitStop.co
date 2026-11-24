@@ -1,0 +1,77 @@
+{
+  "brands": [
+    "Mini GT",
+    "Inno64",
+    "Kaido House",
+    "Pop Race",
+    "Time Micro",
+    "LCD Models",
+    "CM Model",
+    "Almost Real",
+    "Ignition Model",
+    "FuelMe"
+  ],
+  "categories": ["Classic", "Sport", "Racing"],
+  "products": [
+    {
+      "id": "midnight-gt",
+      "name": "Example model name",
+      "make": "Mini GT",
+      "scale": "1:24 scale",
+      "category": "Sport",
+      "price": 24,
+      "stock": 4,
+      "bestSeller": true,
+      "newArrival": false,
+      "condition": "New",
+      "image": "",
+      "imageAlt": "",
+      "description": "Add a short description and the model's condition."
+    },
+    {
+      "id": "sunset-classic",
+      "name": "Example classic car",
+      "make": "Inno64",
+      "scale": "1:18 scale",
+      "category": "Classic",
+      "price": 38,
+      "stock": 2,
+      "bestSeller": true,
+      "newArrival": true,
+      "condition": "New",
+      "image": "",
+      "imageAlt": "",
+      "description": "Add a short description and the model's condition."
+    },
+    {
+      "id": "apex-track",
+      "name": "Example racing car",
+      "make": "Kaido House",
+      "scale": "1:32 scale",
+      "category": "Racing",
+      "price": 18,
+      "stock": 0,
+      "bestSeller": false,
+      "newArrival": true,
+      "condition": "New",
+      "image": "",
+      "imageAlt": "",
+      "description": "Add a short description and the model's condition."
+    },
+    {
+      "id": "coastal-roadster",
+      "name": "Example sports car",
+      "make": "Pop Race",
+      "scale": "1:24 scale",
+      "category": "Sport",
+      "price": 29,
+      "stock": 5,
+      "bestSeller": false,
+      "newArrival": true,
+      "condition": "New",
+      "image": "",
+      "imageAlt": "",
+      "description": "Add a short description and the model's condition."
+    }
+  ]
+}

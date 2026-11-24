@@ -27,6 +27,36 @@
     if (window.location.hash !== `#${tab}`) history.replaceState(null, "", `#${tab}`);
   }
 
+  function lines(value) {
+    return String(value || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  }
+
+  function optionalNumber(value) {
+    return value === null || String(value).trim() === "" ? null : Number(value);
+  }
+
+  function renderWaitlists(waitlists) {
+    const container = document.querySelector("#waitlists");
+    if (!waitlists.length) {
+      listMessage(container, "No one is waiting yet. Customers can ask to be told when sold-out or pre-order models are available.");
+      return;
+    }
+    container.replaceChildren(...waitlists.map(({ product, waiting, emails }) => {
+      const row = element("div", "dashboard-row waitlist-row");
+      const edit = element("button", "waitlist-name");
+      edit.type = "button";
+      edit.dataset.editStock = product.id;
+      const ready = product.stock > 0 && !product.preorder;
+      const state = product.preorder ? "Pre-order" : ready ? "Back in stock" : "Sold out";
+      edit.append(element("strong", "", product.name), element("small", "", `${waiting} waiting · ${state}`));
+      const mail = element("a", "dash-link", "Email list");
+      const subject = ready ? `${product.name} is available at PitStop.co` : `Update on ${product.name} from PitStop.co`;
+      mail.href = `mailto:?bcc=${emails.map(encodeURIComponent).join(",")}&subject=${encodeURIComponent(subject)}`;
+      row.append(edit, mail);
+      return row;
+    }));
+  }
+
   function listMessage(container, text) {
     container.replaceChildren(element("p", "dashboard-empty", text));
   }
@@ -89,6 +119,8 @@
       listMessage(alerts, "Every product has more than 2 in stock.");
     }
 
+    renderWaitlists(data.waitlists || []);
+
     const top = document.querySelector("#top-products");
     if (data.topProducts.length) {
       top.replaceChildren(...data.topProducts.map((product) => {
@@ -125,6 +157,14 @@
     }
     form.elements.bestSeller.checked = product.bestSeller;
     form.elements.newArrival.checked = product.newArrival;
+    form.elements.chase.checked = product.chase;
+    form.elements.preorder.checked = product.preorder;
+    form.elements.editionSize.value = product.editionSize ?? "";
+    form.elements.lengthMm.value = product.lengthMm ?? "";
+    form.elements.releaseDate.value = product.releaseDate || "";
+    form.elements.gallery.value = product.gallery
+      .map((photo) => (photo.label ? `${photo.src} | ${photo.label}` : photo.src)).join("\n");
+    form.elements.spin.value = product.spin.join("\n");
     document.querySelector("#product-form-title").textContent = `Edit ${product.name}`;
     submitButton.textContent = "Save changes";
     cancelEdit.hidden = false;
@@ -282,15 +322,29 @@
       image: values.get("image"),
       imageAlt: values.get("imageAlt"),
       description: values.get("description"),
+      chase: form.elements.chase.checked,
+      preorder: form.elements.preorder.checked,
+      editionSize: optionalNumber(values.get("editionSize")),
+      lengthMm: optionalNumber(values.get("lengthMm")),
+      releaseDate: values.get("releaseDate") || "",
+      gallery: lines(values.get("gallery")).map((line) => {
+        const [src, ...label] = line.split("|");
+        return { src: src.trim(), label: label.join("|").trim() };
+      }),
+      spin: lines(values.get("spin")),
     };
     if (!editing) payload.id = values.get("id");
     try {
-      await window.PitstopApi.request(
+      const result = await window.PitstopApi.request(
         editing ? `/api/admin/products/${encodeURIComponent(idField.value)}` : "/api/admin/products",
         { method: editing ? "PATCH" : "POST", body: JSON.stringify(payload) },
       );
       resetForm();
+      const waiting = result.waitingNotified || 0;
       productsMessage.textContent = editing ? "Product updated." : "Product added.";
+      if (waiting) {
+        productsMessage.textContent += ` ${waiting} ${waiting === 1 ? "customer was" : "customers were"} waiting for it. They'll now see it as available. Email them from Waitlists on the Overview tab.`;
+      }
       await refreshAll();
     } catch (error) {
       formMessage.textContent = error.message;

@@ -30,6 +30,27 @@ PRODUCT_FIELDS = {
     "name", "make", "scale", "category", "price", "stock", "bestSeller",
     "newArrival", "condition", "image", "imageAlt", "description",
 }
+# Collector details. All optional so older clients and catalog files keep working.
+PRODUCT_EXTRA_DEFAULTS = {
+    "gallery": [],
+    "spin": [],
+    "editionSize": None,
+    "chase": False,
+    "releaseDate": "",
+    "preorder": False,
+    "lengthMm": None,
+}
+PRODUCT_EXTRA_COLUMNS = {
+    "gallery": "TEXT NOT NULL DEFAULT '[]'",
+    "spin_frames": "TEXT NOT NULL DEFAULT '[]'",
+    "edition_size": "INTEGER",
+    "chase": "INTEGER NOT NULL DEFAULT 0",
+    "release_date": "TEXT NOT NULL DEFAULT ''",
+    "preorder": "INTEGER NOT NULL DEFAULT 0",
+    "length_mm": "INTEGER",
+}
+MAX_GALLERY_PHOTOS = 12
+MAX_SPIN_FRAMES = 72
 ORDER_STATUSES = ("pending", "confirmed", "shipped", "completed", "cancelled")
 ORDER_TRANSITIONS = {
     "pending": {"confirmed", "cancelled"},
@@ -173,10 +194,21 @@ def init_db():
                 created_at TEXT NOT NULL,
                 PRIMARY KEY (user_id, product_id)
             );
+            CREATE TABLE IF NOT EXISTS product_alerts (
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, product_id)
+            );
+            CREATE INDEX IF NOT EXISTS product_alerts_by_product ON product_alerts (product_id);
             CREATE INDEX IF NOT EXISTS orders_by_user ON orders (user_id, created_at);
             CREATE INDEX IF NOT EXISTS order_items_by_order ON order_items (order_id);
             """
         )
+        existing_columns = {row["name"] for row in db.execute("PRAGMA table_info(products)")}
+        for column, definition in PRODUCT_EXTRA_COLUMNS.items():
+            if column not in existing_columns:
+                db.execute(f"ALTER TABLE products ADD COLUMN {column} {definition}")
         if ADMIN_EMAILS:
             placeholders = ", ".join("?" for _ in ADMIN_EMAILS)
             db.execute(
@@ -185,23 +217,30 @@ def init_db():
             )
         if db.execute("SELECT COUNT(*) FROM products").fetchone()[0] == 0:
             db.executemany(
-                """
-                INSERT INTO products (
-                    id, name, make, scale, category, price, stock, best_seller,
-                    new_arrival, condition, image, image_alt, description
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        product["id"], product["name"], product["make"],
-                        product["scale"], product["category"], product["price"],
-                        product["stock"], int(product["bestSeller"]),
-                        int(product["newArrival"]), product["condition"],
-                        product["image"], product["imageAlt"], product["description"],
-                    )
-                    for product in catalog["products"]
-                ],
+                f"INSERT INTO products ({', '.join(PRODUCT_COLUMNS)}) "
+                f"VALUES ({', '.join('?' for _ in PRODUCT_COLUMNS)})",
+                [product_row({**PRODUCT_EXTRA_DEFAULTS, **product}) for product in catalog["products"]],
             )
+
+
+PRODUCT_COLUMNS = (
+    "id", "name", "make", "scale", "category", "price", "stock", "best_seller",
+    "new_arrival", "condition", "image", "image_alt", "description",
+    "gallery", "spin_frames", "edition_size", "chase", "release_date", "preorder", "length_mm",
+)
+
+
+def product_row(product):
+    """Database values for PRODUCT_COLUMNS, in order, from a product payload."""
+    return (
+        product["id"], product["name"], product["make"], product["scale"],
+        product["category"], product["price"], product["stock"],
+        int(product["bestSeller"]), int(product["newArrival"]), product["condition"],
+        product["image"], product["imageAlt"], product["description"],
+        json.dumps(product["gallery"]), json.dumps(product["spin"]),
+        product["editionSize"], int(product["chase"]), product["releaseDate"],
+        int(product["preorder"]), product["lengthMm"],
+    )
 
 
 def current_user():
@@ -253,7 +292,97 @@ def product_payload(row):
         "image": row["image"],
         "imageAlt": row["image_alt"],
         "description": row["description"],
+        "gallery": json.loads(row["gallery"]),
+        "spin": json.loads(row["spin_frames"]),
+        "editionSize": row["edition_size"],
+        "chase": bool(row["chase"]),
+        "releaseDate": row["release_date"],
+        "preorder": bool(row["preorder"]),
+        "lengthMm": row["length_mm"],
     }
+
+
+def is_valid_image_path(value):
+    """An HTTPS URL or a path inside the images folder."""
+    try:
+        url = urlsplit(value)
+    except ValueError:
+        return False
+    return not (
+        url.scheme not in {"", "https"}
+        or url.scheme == "https" and not url.netloc
+        or url.netloc and url.scheme != "https"
+        or not url.scheme and not url.path.lstrip("/").startswith("images/")
+        or value.startswith("//")
+        or ".." in Path(url.path).parts
+        or any(ord(character) < 32 for character in value)
+    )
+
+
+def optional_whole_number(value, low, high):
+    """Returns (number_or_None, ok)."""
+    if value is None or value == "":
+        return None, True
+    if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+        return None, False
+    return value, True
+
+
+def validate_collector_details(data, values):
+    gallery = data.get("gallery", [])
+    if not isinstance(gallery, list) or len(gallery) > MAX_GALLERY_PHOTOS:
+        return f"Add up to {MAX_GALLERY_PHOTOS} gallery photos."
+    values["gallery"] = []
+    for photo in gallery:
+        if (
+            not isinstance(photo, dict)
+            or set(photo) - {"src", "label"}
+            or not isinstance(photo.get("src"), str)
+            or not isinstance(photo.get("label", ""), str)
+            or len(photo["src"]) > 500
+            or len(photo.get("label", "")) > 60
+        ):
+            return "Each gallery photo needs a path and a short label (up to 60 characters)."
+        src = photo["src"].strip()
+        if not src or not is_valid_image_path(src):
+            return "Gallery photos must be HTTPS URLs or paths in the images folder."
+        values["gallery"].append({"src": src, "label": photo.get("label", "").strip()})
+
+    spin = data.get("spin", [])
+    if not isinstance(spin, list) or len(spin) > MAX_SPIN_FRAMES:
+        return f"Use up to {MAX_SPIN_FRAMES} photos for the 360° view."
+    values["spin"] = []
+    for frame in spin:
+        if not isinstance(frame, str) or len(frame) > 500 or not is_valid_image_path(frame.strip()):
+            return "360° photos must be HTTPS URLs or paths in the images folder."
+        values["spin"].append(frame.strip())
+    if len(values["spin"]) == 1:
+        return "The 360° view needs at least 2 photos."
+
+    values["editionSize"], ok = optional_whole_number(data.get("editionSize"), 1, 1_000_000)
+    if not ok:
+        return "Edition size must be a whole number between 1 and 1,000,000, or empty."
+    values["lengthMm"], ok = optional_whole_number(data.get("lengthMm"), 10, 2000)
+    if not ok:
+        return "Model length must be between 10 and 2000 mm, or empty."
+
+    for field in ("chase", "preorder"):
+        value = data.get(field, False)
+        if not isinstance(value, bool):
+            return f"Set {field} to true or false."
+        values[field] = value
+
+    release_date = data.get("releaseDate", "") or ""
+    if not isinstance(release_date, str):
+        return "Enter the release date as YYYY-MM-DD."
+    release_date = release_date.strip()
+    if release_date:
+        try:
+            release_date = datetime.strptime(release_date, "%Y-%m-%d").date().isoformat()
+        except ValueError:
+            return "Enter the release date as YYYY-MM-DD."
+    values["releaseDate"] = release_date
+    return None
 
 
 def validate_product(data, product_id=None):
@@ -263,7 +392,8 @@ def validate_product(data, product_id=None):
         product_id = data.get("id")
         if not isinstance(product_id, str) or not PRODUCT_ID_PATTERN.fullmatch(product_id):
             return None, "Use a product ID with lowercase letters, numbers, and hyphens."
-    if set(data) - PRODUCT_FIELDS - ({"id"} if "id" in data else set()):
+    allowed = PRODUCT_FIELDS | set(PRODUCT_EXTRA_DEFAULTS) | ({"id"} if "id" in data else set())
+    if set(data) - allowed:
         return None, "The product contains unsupported fields."
     values = {field: data.get(field) for field in PRODUCT_FIELDS}
     for field, max_length in (
@@ -301,20 +431,11 @@ def validate_product(data, product_id=None):
         if not isinstance(value, str) or len(value) > max_length:
             return None, f"Enter a valid {field}."
         values[field] = value.strip()
-    try:
-        image_url = urlsplit(values["image"])
-    except ValueError:
-        return None, "Enter a valid image URL."
-    if values["image"] and (
-        image_url.scheme not in {"", "https"}
-        or image_url.scheme == "https" and not image_url.netloc
-        or image_url.netloc and image_url.scheme != "https"
-        or not image_url.scheme and not image_url.path.lstrip("/").startswith("images/")
-        or values["image"].startswith("//")
-        or ".." in Path(image_url.path).parts
-        or any(ord(character) < 32 for character in values["image"])
-    ):
+    if values["image"] and not is_valid_image_path(values["image"]):
         return None, "Use a secure HTTPS photo URL or a path in the images folder, like images/car.jpg."
+    error = validate_collector_details(data, values)
+    if error:
+        return None, error
     values["id"] = product_id
     return values, None
 
@@ -516,9 +637,11 @@ def update_cart_item(product_id):
     if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity < 0:
         return jsonify(error="Choose a valid quantity."), 400
     db = get_db()
-    product = db.execute("SELECT stock FROM products WHERE id = ?", (product_id,)).fetchone()
+    product = db.execute("SELECT stock, preorder FROM products WHERE id = ?", (product_id,)).fetchone()
     if product is None:
         return jsonify(error="That model is no longer available."), 404
+    if quantity > 0 and product["preorder"]:
+        return jsonify(error="This model isn't released yet. Join the pre-order list instead."), 409
     if quantity > product["stock"]:
         return jsonify(error="There is not enough stock for that quantity."), 409
     if quantity == 0:
@@ -579,6 +702,63 @@ def remove_from_wishlist(product_id):
     )
     db.commit()
     return wishlist_response(session["user_id"])
+
+
+def alerts_response(user_id):
+    rows = get_db().execute(
+        """
+        SELECT a.created_at AS alert_created_at, p.* FROM product_alerts a
+        JOIN products p ON p.id = a.product_id
+        WHERE a.user_id = ? ORDER BY a.created_at DESC
+        """,
+        (user_id,),
+    )
+    items = []
+    for row in rows:
+        product = product_payload(row)
+        items.append({
+            "product": product,
+            "kind": "preorder" if product["preorder"] else "restock",
+            # Ready once the model can be bought: released and back on the shelf.
+            "ready": product["stock"] > 0 and not product["preorder"],
+            "createdAt": row["alert_created_at"],
+        })
+    return jsonify(items=items)
+
+
+@app.get("/api/alerts")
+@require_user
+def get_alerts():
+    return alerts_response(session["user_id"])
+
+
+@app.put("/api/alerts/<product_id>")
+@require_user
+def add_alert(product_id):
+    db = get_db()
+    product = db.execute("SELECT stock, preorder FROM products WHERE id = ?", (product_id,)).fetchone()
+    if product is None:
+        return jsonify(error="That model is no longer available."), 404
+    if product["stock"] > 0 and not product["preorder"]:
+        return jsonify(error="This model is in stock now. Add it to your bag instead."), 409
+    db.execute(
+        "INSERT OR IGNORE INTO product_alerts (user_id, product_id, created_at) VALUES (?, ?, ?)",
+        (session["user_id"], product_id, datetime.now(timezone.utc).isoformat()),
+    )
+    db.commit()
+    return alerts_response(session["user_id"])
+
+
+@app.delete("/api/alerts/<product_id>")
+@require_user
+def remove_alert(product_id):
+    db = get_db()
+    db.execute(
+        "DELETE FROM product_alerts WHERE user_id = ? AND product_id = ?",
+        (session["user_id"], product_id),
+    )
+    db.commit()
+    return alerts_response(session["user_id"])
 
 
 def order_payloads(db, rows, include_customer=False):
@@ -652,7 +832,7 @@ def place_order():
     try:
         items = db.execute(
             """
-            SELECT ci.quantity, p.id, p.name, p.price, p.stock
+            SELECT ci.quantity, p.id, p.name, p.price, p.stock, p.preorder
             FROM cart_items ci JOIN products p ON p.id = ci.product_id
             WHERE ci.user_id = ? ORDER BY p.name COLLATE NOCASE
             """,
@@ -662,6 +842,11 @@ def place_order():
             db.rollback()
             return jsonify(error="Your bag is empty."), 400
         for item in items:
+            if item["preorder"]:
+                db.rollback()
+                return jsonify(
+                    error=f"{item['name']} isn't released yet. Remove it from your bag and try again."
+                ), 409
             if item["quantity"] > item["stock"]:
                 db.rollback()
                 return jsonify(
@@ -685,6 +870,11 @@ def place_order():
                 (order_id, item["id"], item["name"], item["price"], item["quantity"]),
             )
         db.execute("DELETE FROM cart_items WHERE user_id = ?", (user_id,))
+        # The customer got what they were waiting for.
+        db.executemany(
+            "DELETE FROM product_alerts WHERE user_id = ? AND product_id = ?",
+            [(user_id, item["id"]) for item in items],
+        )
         # Bags of other customers may now ask for more than is left.
         db.execute(
             """
@@ -744,6 +934,23 @@ def admin_dashboard():
     recent = db.execute(
         "SELECT o.*, u.email FROM orders o LEFT JOIN users u ON u.id = o.user_id ORDER BY o.created_at DESC LIMIT 5"
     ).fetchall()
+    waitlists = []
+    for row in db.execute(
+        """
+        SELECT p.*, COUNT(*) AS waiting FROM product_alerts a JOIN products p ON p.id = a.product_id
+        GROUP BY p.id ORDER BY waiting DESC, p.name COLLATE NOCASE LIMIT 8
+        """
+    ).fetchall():
+        emails = [
+            entry["email"] for entry in db.execute(
+                """
+                SELECT u.email FROM product_alerts a JOIN users u ON u.id = a.user_id
+                WHERE a.product_id = ? ORDER BY a.created_at
+                """,
+                (row["id"],),
+            )
+        ]
+        waitlists.append({"product": product_payload(row), "waiting": row["waiting"], "emails": emails})
     return jsonify(
         sales=round(sales, 2),
         sales30Days=round(sales_30_days, 2),
@@ -758,6 +965,7 @@ def admin_dashboard():
         stockAlerts=[product_payload(row) for row in stock_alerts],
         topProducts=[dict(row) for row in top_products],
         recentOrders=order_payloads(db, recent, include_customer=True),
+        waitlists=waitlists,
     )
 
 
@@ -833,19 +1041,9 @@ def admin_create_product():
         return jsonify(error=error), 400
     try:
         get_db().execute(
-            """
-            INSERT INTO products (
-                id, name, make, scale, category, price, stock, best_seller,
-                new_arrival, condition, image, image_alt, description
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                product["id"], product["name"], product["make"], product["scale"],
-                product["category"], product["price"], product["stock"],
-                int(product["bestSeller"]), int(product["newArrival"]),
-                product["condition"], product["image"], product["imageAlt"],
-                product["description"],
-            ),
+            f"INSERT INTO products ({', '.join(PRODUCT_COLUMNS)}) "
+            f"VALUES ({', '.join('?' for _ in PRODUCT_COLUMNS)})",
+            product_row(product),
         )
         get_db().commit()
     except sqlite3.IntegrityError:
@@ -861,28 +1059,28 @@ def admin_update_product(product_id):
     if error:
         return jsonify(error=error), 400
     db = get_db()
+    before = db.execute("SELECT stock, preorder FROM products WHERE id = ?", (product_id,)).fetchone()
+    if before is None:
+        return jsonify(error="That product was not found."), 404
+    was_ready = before["stock"] > 0 and not before["preorder"]
+    columns = PRODUCT_COLUMNS[1:]
     cursor = db.execute(
-        """
-        UPDATE products SET name = ?, make = ?, scale = ?, category = ?, price = ?,
-            stock = ?, best_seller = ?, new_arrival = ?, condition = ?, image = ?,
-            image_alt = ?, description = ?
-        WHERE id = ?
-        """,
-        (
-            product["name"], product["make"], product["scale"], product["category"],
-            product["price"], product["stock"], int(product["bestSeller"]),
-            int(product["newArrival"]), product["condition"], product["image"],
-            product["imageAlt"], product["description"], product_id,
-        ),
+        f"UPDATE products SET {', '.join(f'{column} = ?' for column in columns)} WHERE id = ?",
+        (*product_row(product)[1:], product_id),
     )
     if cursor.rowcount == 0:
         return jsonify(error="That product was not found."), 404
     db.execute(
-        "DELETE FROM cart_items WHERE product_id = ? AND quantity > ?",
-        (product_id, product["stock"]),
+        "DELETE FROM cart_items WHERE product_id = ? AND (quantity > ? OR ?)",
+        (product_id, product["stock"], int(product["preorder"])),
     )
+    waiting = db.execute(
+        "SELECT COUNT(*) FROM product_alerts WHERE product_id = ?", (product_id,)
+    ).fetchone()[0]
     db.commit()
-    return jsonify(product=product)
+    ready = product["stock"] > 0 and not product["preorder"]
+    # Customers on the list now see "Back in stock" or "Out now" in their alerts.
+    return jsonify(product=product, waitingNotified=waiting if ready and not was_ready else 0)
 
 
 @app.delete("/api/admin/products/<product_id>")

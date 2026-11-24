@@ -17,8 +17,67 @@
     emailField.value = user.email;
     roleLabel.textContent = user.role === "admin" ? "Administrator account" : "Customer account";
     document.querySelector("#admin-shortcut").hidden = user.role !== "admin";
-    await loadOrders();
+    await Promise.all([loadOrders(), loadAlerts()]);
   }
+
+  const alertList = document.querySelector("#my-alert-list");
+  const alertsMessage = document.querySelector("#alerts-message");
+
+  function renderAlerts(items) {
+    alertList.replaceChildren(...items.map(({ product, kind, ready }) => {
+      const card = document.createElement("li");
+      card.className = `alert-card${ready ? " is-ready" : ""}`;
+      const info = document.createElement("div");
+      info.className = "alert-card-info";
+      const link = document.createElement("a");
+      link.href = `product.html?id=${encodeURIComponent(product.id)}`;
+      link.textContent = product.name;
+      const state = document.createElement("small");
+      if (ready) state.textContent = kind === "preorder" ? "Out now! Buy it before it sells out." : "Back in stock! Buy it before it sells out.";
+      else if (kind === "preorder") state.textContent = product.releaseDate ? `Pre-order · releases ${product.releaseDate}` : "Pre-order · release date to be confirmed";
+      else state.textContent = "Sold out · we're watching for a restock";
+      info.append(link, state);
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "secondary-button";
+      remove.dataset.removeAlert = product.id;
+      remove.textContent = "Remove";
+      remove.setAttribute("aria-label", `Remove alert for ${product.name}`);
+      card.append(info, remove);
+      return card;
+    }));
+    if (!items.length) {
+      const empty = document.createElement("li");
+      empty.className = "profile-role";
+      empty.textContent = "No alerts yet. On a sold-out or pre-order model, tap “Notify me” to add one.";
+      alertList.append(empty);
+    }
+  }
+
+  async function loadAlerts() {
+    try {
+      const { items } = await window.PitstopApi.request("/api/alerts");
+      renderAlerts(items);
+    } catch (error) {
+      alertsMessage.textContent = `Could not load your alerts: ${error.message}`;
+    }
+  }
+
+  alertList.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-remove-alert]");
+    if (!button) return;
+    button.disabled = true;
+    alertsMessage.textContent = "";
+    try {
+      const { items } = await window.PitstopApi.request(`/api/alerts/${encodeURIComponent(button.dataset.removeAlert)}`, {
+        method: "DELETE",
+      });
+      renderAlerts(items);
+    } catch (error) {
+      alertsMessage.textContent = error.message;
+      button.disabled = false;
+    }
+  });
 
   async function loadOrders() {
     const list = document.querySelector("#my-order-list");

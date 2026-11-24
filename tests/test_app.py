@@ -12,6 +12,8 @@ class StorefrontTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         storefront.DATABASE = Path(self.temp_dir.name) / "test.sqlite3"
+        # The shop's own catalog starts empty, so tests seed demo listings from a fixture.
+        storefront.CATALOG_FILE = Path(__file__).with_name("catalog.json")
         storefront.init_db()
         storefront.app.config.update(TESTING=True)
         self.client = storefront.app.test_client()
@@ -219,6 +221,109 @@ class StorefrontTests(unittest.TestCase):
         for image in ("photos/car.jpg", "images/../app.py", "http://example.com/car.jpg"):
             _, error = storefront.validate_product({**product, "image": image}, "test")
             self.assertIsNotNone(error, image)
+
+
+    def admin_product(self, product_id, **changes):
+        product = next(
+            item for item in self.client.get("/api/admin/products").get_json()["products"]
+            if item["id"] == product_id
+        )
+        product.pop("id")
+        product.update(changes)
+        return self.request_with_csrf("PATCH", f"/api/admin/products/{product_id}", json=product)
+
+    def test_restock_alert_flow(self):
+        self.register_customer()
+        # In-stock models go in the bag, not on a waitlist.
+        self.assertEqual(self.request_with_csrf("PUT", "/api/alerts/midnight-gt").status_code, 409)
+        response = self.request_with_csrf("PUT", "/api/alerts/apex-track")
+        self.assertEqual(response.status_code, 200)
+        [alert] = response.get_json()["items"]
+        self.assertEqual((alert["kind"], alert["ready"]), ("restock", False))
+        self.request_with_csrf("POST", "/api/logout", json={})
+        self.refresh_csrf()
+
+        self.sign_in_admin()
+        dashboard = self.client.get("/api/admin/dashboard").get_json()
+        self.assertEqual(dashboard["waitlists"][0]["emails"], ["collector@example.com"])
+        response = self.admin_product("apex-track", stock=3)
+        self.assertEqual(response.get_json()["waitingNotified"], 1)
+        # Saving again while already in stock is not a new restock.
+        self.assertEqual(self.admin_product("apex-track", stock=4).get_json()["waitingNotified"], 0)
+        self.request_with_csrf("POST", "/api/logout", json={})
+        self.refresh_csrf()
+
+        self.request_with_csrf("POST", "/api/login", json={"email": "collector@example.com", "password": "correct horse 7"})
+        self.refresh_csrf()
+        self.assertTrue(self.client.get("/api/alerts").get_json()["items"][0]["ready"])
+        self.request_with_csrf("PUT", "/api/cart/apex-track", json={"quantity": 1})
+        response = self.request_with_csrf(
+            "POST", "/api/orders", json={"name": "C", "phone": "0123456789", "address": "1 Jalan Test"}
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(self.client.get("/api/alerts").get_json()["items"], [])
+
+    def test_preorder_cannot_be_bought_but_can_be_listed(self):
+        self.sign_in_admin()
+        self.assertEqual(
+            self.admin_product("coastal-roadster", preorder=True, releaseDate="2027-01-15").status_code, 200
+        )
+        self.request_with_csrf("POST", "/api/logout", json={})
+        self.refresh_csrf()
+        self.register_customer()
+        response = self.request_with_csrf("PUT", "/api/cart/coastal-roadster", json={"quantity": 1})
+        self.assertEqual(response.status_code, 409)
+        [alert] = self.request_with_csrf("PUT", "/api/alerts/coastal-roadster").get_json()["items"]
+        self.assertEqual((alert["kind"], alert["ready"]), ("preorder", False))
+        self.assertEqual(alert["product"]["releaseDate"], "2027-01-15")
+
+    def test_collector_details_are_saved_and_validated(self):
+        self.sign_in_admin()
+        response = self.admin_product(
+            "midnight-gt",
+            editionSize=3000,
+            chase=True,
+            lengthMm=190,
+            gallery=[{"src": "images/wheels.jpg", "label": "Wheels"}],
+            spin=["images/spin-1.jpg", "https://example.com/spin-2.jpg"],
+        )
+        self.assertEqual(response.status_code, 200)
+        saved = next(p for p in self.client.get("/api/products").get_json()["products"] if p["id"] == "midnight-gt")
+        self.assertEqual(saved["editionSize"], 3000)
+        self.assertTrue(saved["chase"])
+        self.assertEqual(saved["gallery"], [{"src": "images/wheels.jpg", "label": "Wheels"}])
+        self.assertEqual(len(saved["spin"]), 2)
+        for bad in (
+            {"gallery": [{"src": "photos/x.jpg", "label": ""}]},
+            {"spin": ["images/only-one.jpg"]},
+            {"spin": ["http://example.com/a.jpg", "images/b.jpg"]},
+            {"editionSize": 0},
+            {"editionSize": True},
+            {"lengthMm": 5},
+            {"releaseDate": "15/01/2027"},
+            {"chase": "yes"},
+        ):
+            self.assertEqual(self.admin_product("midnight-gt", **bad).status_code, 400, bad)
+
+    def test_older_database_gains_collector_columns(self):
+        with closing(storefront.connect_db()) as db, db:
+            db.executescript(
+                """
+                DROP TABLE products;
+                CREATE TABLE products (
+                    id TEXT PRIMARY KEY, name TEXT NOT NULL, make TEXT NOT NULL, scale TEXT NOT NULL,
+                    category TEXT NOT NULL, price REAL NOT NULL, stock INTEGER NOT NULL,
+                    best_seller INTEGER NOT NULL DEFAULT 0, new_arrival INTEGER NOT NULL DEFAULT 0,
+                    condition TEXT NOT NULL, image TEXT NOT NULL DEFAULT '',
+                    image_alt TEXT NOT NULL DEFAULT '', description TEXT NOT NULL
+                );
+                INSERT INTO products (id, name, make, scale, category, price, stock, condition, description)
+                VALUES ('old-car', 'Old car', 'Brand', '1:64', 'Classic', 10, 1, 'New', 'Old listing');
+                """
+            )
+        storefront.init_db()
+        [product] = self.client.get("/api/products").get_json()["products"]
+        self.assertEqual((product["gallery"], product["spin"], product["preorder"]), ([], [], False))
 
 
 if __name__ == "__main__":

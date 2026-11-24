@@ -78,6 +78,10 @@
                 <div class="dashboard-list" id="stock-alerts"></div>
               </section>
               <section class="dash-card">
+                <div class="dash-card-heading"><h2>Waitlists</h2><p>Restock and pre-order requests</p></div>
+                <div class="dashboard-list" id="waitlists"></div>
+              </section>
+              <section class="dash-card">
                 <div class="dash-card-heading"><h2>Best sellers</h2></div>
                 <div class="dashboard-list" id="top-products"></div>
               </section>
@@ -129,6 +133,26 @@
                 <label><input name="bestSeller" type="checkbox"> Best seller</label>
                 <label><input name="newArrival" type="checkbox"> New arrival</label>
               </div>
+              <fieldset class="admin-fieldset">
+                <legend>Collector details <span>(optional)</span></legend>
+                <div class="admin-form-grid">
+                  <label>Edition size<input name="editionSize" type="number" min="1" max="1000000" step="1" placeholder="e.g. 3000"></label>
+                  <label>Release date<input name="releaseDate" type="date"></label>
+                  <label class="span-2">Model length (mm)<input name="lengthMm" type="number" min="10" max="2000" step="1" placeholder="Leave empty to estimate from the scale"></label>
+                </div>
+                <div class="admin-checkboxes">
+                  <label><input name="chase" type="checkbox"> Chase variant</label>
+                  <label><input name="preorder" type="checkbox"> Pre-order (not released yet)</label>
+                </div>
+                <p class="admin-hint">Pre-order models can't go in a bag. Customers join a list instead. Untick it on release day and give the model some stock: everyone on the list then sees "Out now".</p>
+              </fieldset>
+              <fieldset class="admin-fieldset">
+                <legend>Close-up photos <span>(optional)</span></legend>
+                <label>Gallery photos<textarea name="gallery" rows="3" placeholder="images/skyline-wheels.jpg | Wheels&#10;images/skyline-box.jpg | Box condition"></textarea></label>
+                <p class="admin-hint">One per line: photo, then <code>|</code>, then a short label. Up to 12.</p>
+                <label>360° spin photos<textarea name="spin" rows="3" placeholder="images/skyline-spin-01.jpg&#10;images/skyline-spin-02.jpg&#10;…"></textarea></label>
+                <p class="admin-hint">One photo per line, taken all the way around the car in order (24–36 photos look smooth). Up to 72.</p>
+              </fieldset>
               <p class="form-message" id="form-message" role="status"></p>
               <div class="admin-form-actions">
                 <button class="primary-link account-submit" type="submit">Add product</button>

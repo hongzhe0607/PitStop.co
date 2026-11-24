@@ -29,6 +29,10 @@
   let products = [];
   let cart = [];
   let wishlist = new Set();
+  let alerts = new Map();
+  let galleryIndex = 0;
+  let galleryProductId = null;
+  let spinFrame = 0;
   let brands = [];
   let categories = [];
   let currentUser = null;
@@ -71,13 +75,41 @@
       </div>`;
   }
 
-  function badgesMarkup(product) {
+  const dateFormat = new Intl.DateTimeFormat("en-MY", { day: "numeric", month: "short", year: "numeric" });
+  const numberFormat = new Intl.NumberFormat("en-MY");
+
+  function formatReleaseDate(value) {
+    return value ? dateFormat.format(new Date(`${value}T00:00:00`)) : "";
+  }
+
+  function daysUntil(value) {
+    if (!value) return null;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return Math.round((new Date(`${value}T00:00:00`) - today) / 86400000);
+  }
+
+  function canBuy(product) {
+    return product.stock > 0 && !product.preorder;
+  }
+
+  function badgesMarkup(product, limit = 2) {
     const badges = [];
-    if (product.stock === 0) badges.push('<span class="badge badge-sold-out">Sold out</span>');
-    else if (product.stock <= 2) badges.push(`<span class="badge badge-low">Only ${product.stock} left!</span>`);
+    if (product.preorder) badges.push('<span class="badge badge-preorder">Pre-order</span>');
+    else if (product.stock === 0) badges.push('<span class="badge badge-sold-out">Sold out</span>');
+    if (product.chase) badges.push('<span class="badge badge-chase">Chase</span>');
+    if (product.editionSize) badges.push(`<span class="badge badge-limited">1 of ${numberFormat.format(product.editionSize)}</span>`);
+    if (!product.preorder && product.stock > 0 && product.stock <= 2) badges.push(`<span class="badge badge-low">Only ${product.stock} left!</span>`);
     if (product.newArrival) badges.push('<span class="badge badge-new">New</span>');
-    if (product.bestSeller && badges.length < 2) badges.push('<span class="badge badge-best">Best seller</span>');
-    return badges.length ? `<div class="product-badges">${badges.slice(0, 2).join("")}</div>` : "";
+    if (product.bestSeller) badges.push('<span class="badge badge-best">Best seller</span>');
+    return badges.length ? `<div class="product-badges">${badges.slice(0, limit).join("")}</div>` : "";
+  }
+
+  function stockLabel(product) {
+    if (product.preorder) {
+      return product.releaseDate ? `Pre-order · releases ${formatReleaseDate(product.releaseDate)}` : "Pre-order · coming soon";
+    }
+    return product.stock > 0 ? `In stock (${product.stock})` : "Sold out";
   }
 
   function wishButton(product, extraClass = "") {
@@ -86,10 +118,10 @@
   }
 
   function productMarkup(product) {
-    const inStock = product.stock > 0;
+    const inStock = canBuy(product);
     const name = escapeHtml(product.name);
     return `
-      <article class="product-card${inStock ? "" : " is-sold-out"}">
+      <article class="product-card${product.stock === 0 && !product.preorder ? " is-sold-out" : ""}">
         <div class="product-image-wrap">
           ${imageMarkup(product)}
           ${badgesMarkup(product)}
@@ -101,7 +133,7 @@
           <strong>${formatPrice(product.price)}</strong>
         </div>
         <p class="product-description">${escapeHtml(product.condition)} · ${escapeHtml(product.description)}</p>
-        <p class="stock-status ${inStock ? "in-stock" : "sold-out"}">${inStock ? `In stock (${product.stock})` : "Sold out"}</p>
+        <p class="stock-status ${inStock ? "in-stock" : product.preorder ? "preorder" : "sold-out"}">${stockLabel(product)}${alerts.has(product.id) ? " · on your list" : ""}</p>
       </article>
     `;
   }
@@ -129,7 +161,7 @@
       }).join("");
     }
     if (heroStats) {
-      const inStock = products.filter((product) => product.stock > 0).length;
+      const inStock = products.filter(canBuy).length;
       const brandCount = new Set(products.map((product) => product.make)).size;
       heroStats.innerHTML = [
         [products.length, products.length === 1 ? "model" : "models"],
@@ -148,20 +180,20 @@
       }).join("");
     }
     if (featured) {
-      const pick = products.find((product) => product.bestSeller && product.stock > 0)
-        || products.find((product) => product.stock > 0)
+      const pick = products.find((product) => product.bestSeller && canBuy(product))
+        || products.find(canBuy)
         || products[0];
       featured.closest("section").hidden = !pick;
       if (pick) {
         featured.innerHTML = `
-          <div class="featured-media">${imageMarkup(pick)}${badgesMarkup(pick)}</div>
+          <div class="featured-media">${imageMarkup(pick)}${badgesMarkup(pick, 3)}</div>
           <div class="featured-info">
             <p class="product-make">${escapeHtml(pick.make)} · ${escapeHtml(pick.scale)} · ${escapeHtml(pick.category)}</p>
             <h3>${escapeHtml(pick.name)}</h3>
             <p class="featured-description">${escapeHtml(pick.description)}</p>
             <p class="featured-price">${formatPrice(pick.price)}</p>
             <div class="featured-actions">
-              <button class="primary-link" type="button" data-add="${escapeHtml(pick.id)}" ${pick.stock > 0 ? "" : "disabled"}>${pick.stock > 0 ? "Add to bag" : "Sold out"}</button>
+              <button class="primary-link" type="button" data-add="${escapeHtml(pick.id)}" ${canBuy(pick) ? "" : "disabled"}>${canBuy(pick) ? "Add to bag" : pick.preorder ? "Pre-order" : "Sold out"}</button>
               <a class="secondary-button" href="${productUrl(pick)}">View details</a>
               ${wishButton(pick)}
             </div>
@@ -207,8 +239,10 @@
       const matchesCategory = category === "All" || product.category === category;
       const matchesBrand = brand === "All" || product.make === brand;
       const matchesStock = status === "all" ||
-        (status === "available" && product.stock > 0) ||
-        (status === "sold-out" && product.stock === 0);
+        (status === "available" && canBuy(product)) ||
+        (status === "sold-out" && product.stock === 0 && !product.preorder) ||
+        (status === "preorder" && product.preorder) ||
+        (status === "limited" && (product.chase || Boolean(product.editionSize)));
       let matchesPrice = true;
       if (priceRange === "0-25") matchesPrice = product.price < 25;
       if (priceRange === "25-50") matchesPrice = product.price >= 25 && product.price <= 50;
@@ -226,6 +260,178 @@
     writeCatalogParams();
   }
 
+  // ---- Product page: gallery, 360° spin, rarity, alerts, scale ----
+
+  function galleryViews(product) {
+    const views = [];
+    if (product.image) views.push({ type: "image", src: product.image, label: product.imageAlt || "Main photo" });
+    (product.gallery || []).forEach((photo) => views.push({ type: "image", src: photo.src, label: photo.label }));
+    if ((product.spin || []).length >= 2) views.push({ type: "spin", src: product.spin[0], label: "360° view" });
+    return views;
+  }
+
+  function galleryMarkup(product) {
+    const views = galleryViews(product);
+    if (galleryProductId !== product.id) {
+      galleryProductId = product.id;
+      galleryIndex = 0;
+      spinFrame = 0;
+    }
+    galleryIndex = Math.min(galleryIndex, Math.max(0, views.length - 1));
+    const view = views[galleryIndex];
+    const name = escapeHtml(product.name);
+    let main;
+    if (!view) {
+      main = imageMarkup(product);
+    } else if (view.type === "spin") {
+      const frames = product.spin.length;
+      main = `<div class="spin-viewer" tabindex="0" role="slider" aria-label="Rotate ${name}. Use the arrow keys or drag." aria-valuemin="1" aria-valuemax="${frames}" aria-valuenow="${spinFrame + 1}" aria-valuetext="Angle ${Math.round((spinFrame / frames) * 360)}°">
+          <img class="product-image spin-image" src="${escapeHtml(product.spin[spinFrame])}" alt="${name}, rotating view" draggable="false">
+          <span class="spin-hint" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3"></path><path d="M18 3v4h-4M6 21v-4h4"></path></svg>Drag to spin</span>
+        </div>`;
+    } else {
+      main = `<button class="zoom-frame" type="button" data-zoom aria-label="Zoom in on ${escapeHtml(view.label || product.name)}">
+          <img class="product-image" src="${escapeHtml(view.src)}" alt="${escapeHtml(view.label || product.name)}" draggable="false">
+          <span class="zoom-hint" aria-hidden="true">Tap to zoom</span>
+        </button>`;
+    }
+    const caption = view && view.type === "image" && galleryIndex > 0 && view.label
+      ? `<p class="media-caption">${escapeHtml(view.label)}</p>` : "";
+    const thumbs = views.length > 1
+      ? `<div class="gallery-thumbs" role="group" aria-label="Photos of ${name}">${views.map((entry, index) => `
+          <button type="button" class="gallery-thumb${entry.type === "spin" ? " is-spin" : ""}" data-gallery="${index}" aria-pressed="${index === galleryIndex}" aria-label="${escapeHtml(entry.label || `Photo ${index + 1}`)}">
+            <img src="${escapeHtml(entry.src)}" alt="" loading="lazy">${entry.type === "spin" ? "<span>360°</span>" : ""}
+          </button>`).join("")}</div>`
+      : "";
+    return `<div class="detail-gallery">
+        <div class="detail-media">${main}${badgesMarkup(product, 3)}${caption}</div>
+        ${thumbs}
+      </div>`;
+  }
+
+  function rarityMarkup(product) {
+    const rows = [];
+    if (product.editionSize) {
+      rows.push(["Limited edition", `1 of ${numberFormat.format(product.editionSize)} made`, "limited"]);
+    }
+    if (product.chase) {
+      rows.push(["Chase variant", "A rare version packed at random. Hard to find.", "chase"]);
+    }
+    if (product.releaseDate) {
+      const days = daysUntil(product.releaseDate);
+      const when = formatReleaseDate(product.releaseDate);
+      let text = `Released ${when}`;
+      if (days > 1) text = `Releases ${when} · in ${days} days`;
+      else if (days === 1) text = `Releases tomorrow, ${when}`;
+      else if (days === 0) text = "Releases today";
+      rows.push([product.preorder ? "Release date" : "Released", text, "release"]);
+    } else if (product.preorder) {
+      rows.push(["Release date", "Coming soon. Date to be confirmed.", "release"]);
+    }
+    if (!rows.length) return "";
+    return `<ul class="rarity-panel" aria-label="Edition details">${rows.map(([title, text, kind]) => `
+        <li class="rarity-${kind}"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(text)}</span></li>`).join("")}</ul>`;
+  }
+
+  function buyMarkup(product, available, inStock) {
+    if (canBuy(product)) {
+      return `<div class="qty-picker" role="group" aria-label="Quantity">
+          <button type="button" data-qty="-1" aria-label="Decrease quantity" ${detailQuantity <= 1 || !available ? "disabled" : ""}>−</button>
+          <output aria-live="polite">${available ? detailQuantity : 0}</output>
+          <button type="button" data-qty="1" aria-label="Increase quantity" ${detailQuantity >= available ? "disabled" : ""}>+</button>
+        </div>
+        <button class="primary-link detail-add" type="button" data-add-detail="${escapeHtml(product.id)}" ${available ? "" : "disabled"}>${!inStock ? "Sold out" : available ? "Add to bag" : "All in your bag"}</button>`;
+    }
+    const onList = alerts.has(product.id);
+    const label = product.preorder
+      ? (onList ? "✓ You’re on the pre-order list" : "Join the pre-order list")
+      : (onList ? "✓ We’ll let you know" : "Notify me when it’s back");
+    return `<button class="primary-link detail-add alert-button${onList ? " is-on" : ""}" type="button" data-alert="${escapeHtml(product.id)}" aria-pressed="${onList}">${label}</button>`;
+  }
+
+  function alertNote(product) {
+    if (canBuy(product)) return "";
+    const onList = alerts.has(product.id);
+    const what = product.preorder ? "when it’s released" : "as soon as it’s back in stock";
+    return `<p class="alert-note">${onList
+      ? `It will show under <a href="profile.html#alerts">My alerts</a> ${what}. Tap the button again to leave the list.`
+      : `Join free. It will show under My alerts on your profile ${what}, and the shop can email you.`}</p>`;
+  }
+
+  // Typical 1:1 car length, used when the admin hasn't entered a model length.
+  const REAL_CAR_MM = 4500;
+  const COMMON_SCALES = [18, 24, 32, 43, 64];
+
+  function scaleRatio(product) {
+    const match = /1\s*[:/]\s*(\d{1,3})/.exec(product.scale || "");
+    const ratio = match ? Number(match[1]) : 0;
+    return ratio >= 5 && ratio <= 200 ? ratio : 0;
+  }
+
+  function sizeComparison(mm) {
+    if (mm <= 30) return "about the size of a coin";
+    if (mm <= 95) return "about the length of a bank card";
+    if (mm <= 135) return "a little shorter than a phone";
+    if (mm <= 165) return "about as long as a phone";
+    return `about ${(mm / 147).toFixed(1)}× the length of a phone`;
+  }
+
+  function renderScaleSection(product) {
+    const section = document.querySelector("#scale-section");
+    if (!section) return;
+    const ratio = product ? scaleRatio(product) : 0;
+    section.hidden = !ratio;
+    if (!ratio) return;
+    const thisMm = product.lengthMm || Math.round(REAL_CAR_MM / ratio);
+    const scales = [...new Set([...COMMON_SCALES, ratio])].sort((a, b) => a - b);
+    const items = [
+      { kind: "phone", mm: 71, heightMm: 147, label: "Phone", size: "14.7 cm tall" },
+      { kind: "coin", mm: 24, heightMm: 24, label: "Coin", size: "2.4 cm" },
+      ...scales.map((scale) => {
+        const mm = scale === ratio ? thisMm : Math.round(REAL_CAR_MM / scale);
+        return { kind: "car", mm, label: `1:${scale}`, size: `${(mm / 10).toFixed(1)} cm`, current: scale === ratio };
+      }),
+    ];
+    const totalMm = items.reduce((sum, item) => sum + item.mm, 0);
+    const car = `<svg viewBox="50 34 175 72" aria-hidden="true" focusable="false">${CAR_PATHS}</svg>`;
+    section.innerHTML = `
+      <div class="section-heading">
+        <div><p class="eyebrow">HOW BIG IS IT?</p><h2 id="scale-heading">Size check</h2></div>
+      </div>
+      <p class="scale-summary">This ${escapeHtml(`1:${ratio}`)} model is about <strong>${(thisMm / 10).toFixed(1)} cm</strong> long, ${sizeComparison(thisMm)}.${product.lengthMm ? "" : " <span>Estimated from a 4.5 m car. Real lengths vary by model.</span>"}</p>
+      <div class="scale-shelf-wrap">
+        <ul class="scale-shelf" aria-label="Size compared with a phone, a coin, and other scales">
+          ${items.map((item) => `
+            <li class="scale-item scale-${item.kind}${item.current ? " is-current" : ""}" data-mm="${item.mm}">
+              <span class="scale-shape">${item.kind === "car" ? car : ""}</span>
+              <span class="scale-label"><strong>${escapeHtml(item.current ? "This model" : item.label)}</strong><small>${item.current ? `${escapeHtml(item.label)} · ` : ""}${escapeHtml(item.size)}</small></span>
+            </li>`).join("")}
+        </ul>
+      </div>
+      <p class="scale-legend">Everything on this shelf is drawn to the same scale.</p>`;
+    // Widths go through the CSSOM because the CSP blocks inline style attributes.
+    section.querySelectorAll(".scale-item").forEach((element) => {
+      element.style.flexBasis = `${(Number(element.dataset.mm) / totalMm) * 100}%`;
+    });
+  }
+
+  function setSpinFrame(viewer, frame) {
+    const product = products.find((entry) => entry.id === galleryProductId);
+    if (!product || !product.spin.length) return;
+    const frames = product.spin.length;
+    spinFrame = ((frame % frames) + frames) % frames;
+    viewer.querySelector(".spin-image").src = product.spin[spinFrame];
+    viewer.setAttribute("aria-valuenow", String(spinFrame + 1));
+    viewer.setAttribute("aria-valuetext", `Angle ${Math.round((spinFrame / frames) * 360)}°`);
+  }
+
+  const preloadedSpins = new Set();
+  function preloadSpin(product) {
+    if (preloadedSpins.has(product.id)) return;
+    preloadedSpins.add(product.id);
+    (product.spin || []).forEach((src) => { const image = new Image(); image.src = src; });
+  }
+
   function renderProductDetail() {
     if (!productDetail) return;
     const id = new URLSearchParams(window.location.search).get("id");
@@ -234,21 +440,32 @@
     if (!product) {
       crumb.textContent = "Not found";
       productDetail.innerHTML = '<div class="detail-missing"><h1>We couldn’t find that model.</h1><p>It may have sold out and been removed from the shop.</p><a class="primary-link" href="diecast.html">Browse all diecast cars →</a></div>';
+      renderScaleSection(null);
       return;
     }
     document.title = `${product.name} | PitStop.co`;
     crumb.textContent = product.name;
     const inStock = product.stock > 0;
     const inBag = cart.find((item) => item.product.id === product.id)?.quantity || 0;
-    const available = Math.max(0, product.stock - inBag);
+    const available = canBuy(product) ? Math.max(0, product.stock - inBag) : 0;
     detailQuantity = Math.min(Math.max(1, detailQuantity), Math.max(1, available));
+    let status = "Sold out";
+    let statusClass = "sold-out";
+    if (product.preorder) {
+      status = stockLabel(product);
+      statusClass = "preorder";
+    } else if (inStock) {
+      status = `In stock · ${product.stock} available${inBag ? ` · ${inBag} in your bag` : ""}`;
+      statusClass = "in-stock";
+    }
     productDetail.innerHTML = `
-      <div class="detail-media">${imageMarkup(product)}${badgesMarkup(product)}</div>
+      ${galleryMarkup(product)}
       <div class="detail-info">
         <p class="product-make">${escapeHtml(product.make)} · ${escapeHtml(product.scale)} · ${escapeHtml(product.category)}</p>
         <h1>${escapeHtml(product.name)}</h1>
         <p class="detail-price">${formatPrice(product.price)}</p>
-        <p class="stock-status ${inStock ? "in-stock" : "sold-out"}">${inStock ? `In stock · ${product.stock} available${inBag ? ` · ${inBag} in your bag` : ""}` : "Sold out"}</p>
+        <p class="stock-status ${statusClass}">${escapeHtml(status)}</p>
+        ${rarityMarkup(product)}
         <p class="detail-description">${escapeHtml(product.description)}</p>
         <dl class="detail-specs">
           <div><dt>Brand</dt><dd>${escapeHtml(product.make)}</dd></div>
@@ -257,15 +474,13 @@
           <div><dt>Condition</dt><dd>${escapeHtml(product.condition)}</dd></div>
         </dl>
         <div class="detail-buy">
-          <div class="qty-picker" role="group" aria-label="Quantity">
-            <button type="button" data-qty="-1" aria-label="Decrease quantity" ${detailQuantity <= 1 || !available ? "disabled" : ""}>−</button>
-            <output aria-live="polite">${available ? detailQuantity : 0}</output>
-            <button type="button" data-qty="1" aria-label="Increase quantity" ${detailQuantity >= available ? "disabled" : ""}>+</button>
-          </div>
-          <button class="primary-link detail-add" type="button" data-add-detail="${escapeHtml(product.id)}" ${available ? "" : "disabled"}>${!inStock ? "Sold out" : available ? "Add to bag" : "All in your bag"}</button>
+          ${buyMarkup(product, available, inStock)}
           ${wishButton(product, "wish-large")}
         </div>
+        ${alertNote(product)}
       </div>`;
+    renderScaleSection(product);
+    preloadSpin(product);
 
     const related = products
       .filter((entry) => entry.id !== product.id)
@@ -397,6 +612,50 @@
   async function refreshWishlist() {
     const result = await window.PitstopApi.request("/api/wishlist");
     wishlist = new Set(result.items.map((product) => product.id));
+  }
+
+  function setAlerts(items) {
+    alerts = new Map(items.map((item) => [item.product.id, item]));
+  }
+
+  async function refreshAlerts() {
+    const result = await window.PitstopApi.request("/api/alerts");
+    setAlerts(result.items);
+  }
+
+  function announceReadyAlerts() {
+    const ready = [...alerts.values()].filter((item) => item.ready);
+    const key = `pitstopAlertsSeen:${ready.map((item) => item.product.id).sort().join(",")}`;
+    if (!ready.length || sessionStorage.getItem(key)) return;
+    sessionStorage.setItem(key, "1");
+    showToast(ready.length === 1
+      ? `Good news: ${ready[0].product.name} is ${ready[0].kind === "preorder" ? "out now" : "back in stock"}!`
+      : `Good news: ${ready.length} models you were waiting for are available now.`);
+  }
+
+  async function toggleAlert(button) {
+    if (!currentUser) {
+      goToLogin();
+      return;
+    }
+    const id = button.dataset.alert;
+    const joining = !alerts.has(id);
+    button.disabled = true;
+    try {
+      const result = await window.PitstopApi.request(`/api/alerts/${encodeURIComponent(id)}`, {
+        method: joining ? "PUT" : "DELETE",
+      });
+      setAlerts(result.items);
+      const product = products.find((entry) => entry.id === id);
+      showToast(joining
+        ? (product?.preorder ? "You’re on the pre-order list." : "Done! We’ll let you know when it’s back.")
+        : "Removed from your alerts.");
+      renderProductDetail();
+    } catch (error) {
+      if (error.status === 401) goToLogin();
+      else showToast(error.message);
+      button.disabled = false;
+    }
   }
 
   async function updateQuantity(productId, quantity) {
@@ -563,11 +822,12 @@
       }
       readCatalogParams();
       if (currentUser) {
-        await Promise.all([refreshCart(), refreshWishlist()]);
+        await Promise.all([refreshCart(), refreshWishlist(), refreshAlerts()]);
       } else {
         renderCart();
       }
       renderAll();
+      announceReadyAlerts();
     } catch (error) {
       console.error("Could not load the storefront.", error);
       showToast(`Could not load the storefront: ${error.message}`);
@@ -609,6 +869,25 @@
       toggleWish(wishButtonElement);
       return;
     }
+    const alertButton = event.target.closest("[data-alert]");
+    if (alertButton) {
+      toggleAlert(alertButton);
+      return;
+    }
+    const thumb = event.target.closest("[data-gallery]");
+    if (thumb) {
+      galleryIndex = Number(thumb.dataset.gallery);
+      renderProductDetail();
+      productDetail.querySelector(`[data-gallery="${galleryIndex}"]`)?.focus();
+      return;
+    }
+    const zoomFrame = event.target.closest("[data-zoom]");
+    if (zoomFrame) {
+      const zoomed = zoomFrame.classList.toggle("is-zoomed");
+      zoomFrame.setAttribute("aria-label", zoomed ? "Zoom out" : "Zoom in");
+      if (zoomed) moveZoom(zoomFrame, event);
+      return;
+    }
     const qtyButton = event.target.closest("[data-qty]");
     if (qtyButton) {
       detailQuantity += Number(qtyButton.dataset.qty);
@@ -624,6 +903,55 @@
       if (detailAdd) detailQuantity = 1;
     });
   });
+
+  function moveZoom(frame, event) {
+    const image = frame.querySelector("img");
+    const bounds = frame.getBoundingClientRect();
+    // Keyboard clicks have no pointer position, so zoom into the centre.
+    const x = event.detail === 0 ? 50 : ((event.clientX - bounds.left) / bounds.width) * 100;
+    const y = event.detail === 0 ? 50 : ((event.clientY - bounds.top) / bounds.height) * 100;
+    image.style.transformOrigin = `${Math.min(100, Math.max(0, x))}% ${Math.min(100, Math.max(0, y))}%`;
+  }
+
+  if (productDetail) {
+    let spinDrag = null;
+    productDetail.addEventListener("pointermove", (event) => {
+      const frame = event.target.closest(".zoom-frame.is-zoomed");
+      if (frame) moveZoom(frame, event);
+      if (spinDrag && spinDrag.id === event.pointerId) {
+        // One frame per 10px of drag; dragging right turns the car right.
+        const steps = Math.round((event.clientX - spinDrag.x) / 10);
+        if (steps !== 0) {
+          setSpinFrame(spinDrag.viewer, spinFrame - steps);
+          spinDrag.x = event.clientX;
+        }
+      }
+    });
+    productDetail.addEventListener("pointerdown", (event) => {
+      const viewer = event.target.closest(".spin-viewer");
+      if (!viewer || event.button !== 0) return;
+      event.preventDefault();
+      viewer.focus();
+      viewer.setPointerCapture(event.pointerId);
+      viewer.classList.add("is-dragging");
+      spinDrag = { id: event.pointerId, x: event.clientX, viewer };
+    });
+    const endSpin = (event) => {
+      if (!spinDrag || spinDrag.id !== event.pointerId) return;
+      spinDrag.viewer.classList.remove("is-dragging");
+      spinDrag = null;
+    };
+    productDetail.addEventListener("pointerup", endSpin);
+    productDetail.addEventListener("pointercancel", endSpin);
+    productDetail.addEventListener("keydown", (event) => {
+      const viewer = event.target.closest(".spin-viewer");
+      if (!viewer) return;
+      const step = { ArrowLeft: 1, ArrowRight: -1, ArrowUp: -1, ArrowDown: 1 }[event.key];
+      if (step === undefined && event.key !== "Home") return;
+      event.preventDefault();
+      setSpinFrame(viewer, event.key === "Home" ? 0 : spinFrame + step);
+    });
+  }
 
   document.addEventListener("animationend", (event) => {
     if (event.target.classList?.contains("is-popping")) event.target.classList.remove("is-popping");
@@ -676,7 +1004,7 @@
       renderCart();
       setCartOpen(false);
       showToast(`Order #${result.order.id} placed. The shop will contact you about payment.`);
-      await refreshProducts();
+      await Promise.all([refreshProducts(), refreshAlerts().catch(() => {})]);
     } catch (error) {
       if (error.status === 401) {
         goToLogin();
