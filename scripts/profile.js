@@ -137,6 +137,24 @@
     }
   }
 
+  document.querySelector("#my-order-list").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-cancel-order]");
+    if (!button) return;
+    const orderId = button.dataset.cancelOrder;
+    if (!window.confirm(`Cancel order #${orderId}? This can't be undone.`)) return;
+    const ordersMessage = document.querySelector("#orders-message");
+    ordersMessage.textContent = "";
+    button.disabled = true;
+    try {
+      await window.PitstopApi.request(`/api/orders/${encodeURIComponent(orderId)}/cancel`, { method: "POST" });
+      await loadOrders();
+      ordersMessage.textContent = `Order #${orderId} was cancelled.`;
+    } catch (error) {
+      ordersMessage.textContent = error.message;
+      await loadOrders();
+    }
+  });
+
   initialize().catch((error) => {
     message.textContent = `Could not load your profile: ${error.message}`;
   });

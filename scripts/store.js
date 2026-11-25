@@ -39,6 +39,15 @@
   let shopWhatsapp = "";
   let detailQuantity = 1;
   let toastTimer;
+  let placedOrder = null;
+  let savedDetails = null;
+  const orderDone = document.createElement("div");
+  orderDone.className = "order-done";
+  orderDone.hidden = true;
+  cartItemsElement?.after(orderDone);
+  const checkoutSummary = document.createElement("div");
+  checkoutSummary.className = "checkout-summary";
+  checkoutForm?.prepend(checkoutSummary);
   let cartWasDragged = false;
 
   const CAR_PATHS = `
@@ -632,9 +641,18 @@
     const count = cart.reduce((sum, item) => sum + item.quantity, 0);
     document.querySelectorAll(".cart-count").forEach((element) => { element.textContent = count; });
     document.querySelector(".cart-heading-count").textContent = `(${count})`;
+    orderDone.hidden = !placedOrder;
+    if (placedOrder) {
+      renderOrderDone();
+      cartItemsElement.hidden = true;
+      cartEmpty.hidden = true;
+      cartFooter.hidden = true;
+      return;
+    }
     if (!currentUser) {
       cartItemsElement.replaceChildren();
-      cartEmpty.innerHTML = '<p>Sign in or create an account to use your bag.</p><a class="contact-link" href="login.html">Sign in</a> · <a class="contact-link" href="register.html">Create account</a>';
+      const next = encodeURIComponent(`${window.location.pathname}${window.location.search}`);
+      cartEmpty.innerHTML = `<p>Sign in or create an account to use your bag.</p><a class="contact-link" href="login.html?next=${next}">Sign in</a> · <a class="contact-link" href="register.html?next=${next}">Create account</a>`;
       cartEmpty.hidden = false;
       cartFooter.hidden = true;
       return;
@@ -664,14 +682,60 @@
     if (!cart.length) setCheckoutOpen(false);
   }
 
+  function renderOrderDone() {
+    const order = placedOrder;
+    const lines = order.items.map((item) => `• ${item.name} × ${item.quantity}`).join("\n");
+    const message = `Hi PitStop.co, I just placed order #${order.id} on the website.\n${lines}\nTotal: ${formatPrice(order.subtotal)}\nName: ${order.name}`;
+    orderDone.innerHTML = `
+      <div class="order-done-mark" aria-hidden="true">✓</div>
+      <h3>Order #${order.id} placed</h3>
+      <p>Thank you! The shop will contact you at <strong>${escapeHtml(order.phone)}</strong> to arrange payment and delivery.</p>
+      <ul class="order-done-items">${order.items.map((item) => `<li><span>${escapeHtml(item.name)} × ${item.quantity}</span><span>${formatPrice(item.price * item.quantity)}</span></li>`).join("")}
+        <li class="order-done-total"><span>Total</span><strong>${formatPrice(order.subtotal)}</strong></li></ul>
+      ${shopWhatsapp ? `<a class="whatsapp-button order-done-whatsapp" href="${escapeHtml(whatsappLink(message))}" target="_blank" rel="noopener noreferrer">${WHATSAPP_ICON}Send my order on WhatsApp</a>
+      <p class="order-done-hint">Optional, but it gets your order sorted faster.</p>` : ""}
+      <a class="contact-link" href="profile.html#orders">View my orders</a>
+      <button class="contact-link order-done-close" type="button">Continue shopping</button>`;
+  }
+
+  function clearPlacedOrder() {
+    if (!placedOrder) return;
+    placedOrder = null;
+    renderCart();
+  }
+
+  function renderCheckoutSummary() {
+    const count = cart.reduce((sum, item) => sum + item.quantity, 0);
+    checkoutSummary.innerHTML = `<p class="checkout-summary-title">${count} ${count === 1 ? "item" : "items"} in this order</p>
+      <ul>${cart.map((item) => `<li><span>${escapeHtml(item.product.name)}</span><span>× ${item.quantity}</span></li>`).join("")}</ul>`;
+  }
+
+  async function fillSavedDetails() {
+    const fields = checkoutForm.elements;
+    if (fields.phone.value || fields.address.value) return;
+    try {
+      if (!savedDetails) {
+        const { orders } = await window.PitstopApi.request("/api/orders");
+        savedDetails = orders[0] ? { phone: orders[0].phone, address: orders[0].address } : {};
+      }
+      if (!fields.phone.value && savedDetails.phone) fields.phone.value = savedDetails.phone;
+      if (!fields.address.value && savedDetails.address) fields.address.value = savedDetails.address;
+    } catch {
+      // Not important: the customer can type them.
+    }
+  }
+
   function setCheckoutOpen(open) {
     checkoutForm.hidden = !open;
     checkoutStart.hidden = open;
     cartItemsElement.hidden = open;
+    cartPanel.classList.toggle("is-checkout", open);
     if (!open) return;
+    renderCheckoutSummary();
     if (!checkoutForm.elements.name.value && currentUser) checkoutForm.elements.name.value = currentUser.name;
     checkoutForm.querySelector(".checkout-message").textContent = "";
     checkoutForm.elements.name.focus();
+    fillSavedDetails();
   }
 
   async function refreshProducts() {
@@ -859,6 +923,7 @@
   }
 
   function setCartOpen(open) {
+    if (!open) clearPlacedOrder();
     cartPanel.classList.toggle("is-open", open);
     cartPanel.setAttribute("aria-hidden", String(!open));
     cartPanel.inert = !open;
@@ -1115,11 +1180,13 @@
           note: values.get("note"),
         }),
       });
+      savedDetails = { phone: result.order.phone, address: result.order.address };
       checkoutForm.reset();
       cart = [];
+      setCheckoutOpen(false);
+      placedOrder = result.order;
       renderCart();
-      setCartOpen(false);
-      showToast(`Order #${result.order.id} placed. The shop will contact you about payment.`);
+      orderDone.querySelector("h3")?.focus();
       await Promise.all([refreshProducts(), refreshAlerts().catch(() => {})]);
     } catch (error) {
       if (error.status === 401) {
@@ -1131,6 +1198,9 @@
     } finally {
       submit.disabled = false;
     }
+  });
+  orderDone.addEventListener("click", (event) => {
+    if (event.target.closest(".order-done-close")) setCartOpen(false);
   });
   cartEmpty.addEventListener("click", (event) => {
     if (event.target.closest(".continue-shopping")) setCartOpen(false);

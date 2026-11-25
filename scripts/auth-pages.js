@@ -16,9 +16,17 @@
     window.location.assign("/profile.html");
   }
 
+  // Carry "where you were" across the sign in / create account switch.
+  const nextParam = new URLSearchParams(window.location.search).get("next");
+  if (nextParam) {
+    document.querySelectorAll(".account-switch a").forEach((link) => {
+      link.href = `${link.getAttribute("href")}?next=${encodeURIComponent(nextParam)}`;
+    });
+  }
+
   async function initialize() {
     const user = await window.PitstopApi.getUser();
-    if (user) window.location.replace("/profile.html");
+    if (user) redirectAfterAuth();
   }
 
   initialize().catch((error) => {

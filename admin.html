@@ -8,6 +8,8 @@
     <meta name="robots" content="noindex">
     <title>Shop dashboard | PitStop.co</title>
     <link rel="stylesheet" href="styles/main.css">
+    <link rel="icon" type="image/png" href="images/logo/pitstop-icon.png">
+    <link rel="apple-touch-icon" href="images/logo/pitstop-icon.png">
     <script src="scripts/account.js" defer></script>
     <script src="scripts/orders.js" defer></script>
     <script src="scripts/admin.js" defer></script>
@@ -35,9 +37,21 @@
             <h1>Shop dashboard</h1>
             <p class="admin-greeting" id="admin-greeting">Orders, stock, and listings in one place.</p>
           </div>
-          <a class="admin-view-shop" href="diecast.html">View shop <span aria-hidden="true">→</span></a>
+          <div class="admin-header-actions">
+            <button class="admin-view-shop order-alerts-toggle" id="order-alerts" type="button" aria-pressed="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15Z"></path><path d="M10 20.5a2 2 0 0 0 4 0"></path></svg>
+              <span id="order-alerts-label">Order alerts: off</span>
+            </button>
+            <a class="admin-view-shop" href="diecast.html">View shop <span aria-hidden="true">→</span></a>
+          </div>
         </div>
         <p class="form-message" id="admin-message" role="status"></p>
+        <div class="new-order-banner" id="new-order-banner" role="alert" hidden>
+          <span id="new-order-text"></span>
+          <button type="button" class="primary-link" id="new-order-view">View orders</button>
+          <button type="button" class="new-order-dismiss" id="new-order-dismiss" aria-label="Dismiss">×</button>
+        </div>
+        <p class="email-alerts-note" id="email-alerts-note" hidden></p>
         <div class="admin-tabs" role="tablist" aria-label="Dashboard sections">
           <button type="button" role="tab" id="tab-dashboard" aria-controls="panel-dashboard" data-tab="dashboard">Overview</button>
           <button type="button" role="tab" id="tab-orders" aria-controls="panel-orders" data-tab="orders">Orders <span class="tab-count" id="pending-badge" hidden></span></button>
@@ -137,8 +151,8 @@
               </div>
               <div class="dialog-body">
               <div class="admin-form-grid">
-                <label class="span-2">Product ID<input id="product-id" name="id" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required placeholder="e.g. mini-gt-skyline"></label>
-                <label class="span-2">Name<input name="name" required maxlength="120"></label>
+                <label class="span-2">Name<input name="name" required maxlength="120" placeholder="e.g. MINIGT #1218 Nissan Skyline GT-R R34"></label>
+                <label class="span-2">Link name <small class="field-hint">Filled in from the name. Used in the product's web address and can't be changed later.</small><input id="product-id" name="id" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required maxlength="60" placeholder="e.g. minigt-1218-nissan-skyline-gt-r-r34" title="Lowercase letters, numbers, and dashes only"></label>
                 <div class="choice-field"><label for="choice-make">Brand</label><select id="choice-make" name="make" data-choice="make" required></select><input name="makeNew" class="choice-new" maxlength="80" placeholder="New brand name" aria-label="New brand name" hidden></div>
                 <div class="choice-field"><label for="choice-category">Category</label><select id="choice-category" name="category" data-choice="category" required></select><input name="categoryNew" class="choice-new" maxlength="40" placeholder="New category" aria-label="New category" hidden></div>
                 <div class="choice-field"><label for="choice-scale">Scale</label><select id="choice-scale" name="scale" data-choice="scale" required></select><input name="scaleNew" class="choice-new" maxlength="40" placeholder="e.g. 1:12 scale" aria-label="New scale" hidden></div>

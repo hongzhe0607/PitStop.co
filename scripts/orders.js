@@ -34,6 +34,29 @@
     return element("span", `order-status status-${status}`, STATUS_LABELS[status] || status);
   }
 
+  // Malaysian numbers are usually typed as 012-345 6789; WhatsApp needs 60123456789.
+  function whatsappNumber(phone) {
+    const digits = phone.split("").filter((character) => character >= "0" && character <= "9").join("");
+    if (digits.startsWith("0")) return `6${digits}`;
+    return digits;
+  }
+
+  function contactLinks(order) {
+    const links = element("span", "order-contact");
+    const number = whatsappNumber(order.phone);
+    const items = order.items.map((item) => `${item.name} × ${item.quantity}`).join(", ");
+    const whatsapp = element("a", "order-contact-whatsapp", "WhatsApp");
+    whatsapp.href = `https://wa.me/${number}?text=${encodeURIComponent(
+      `Hi ${order.name}, this is PitStop.co about your order #${order.id} (${items}, total ${formatPrice(order.subtotal)}).`,
+    )}`;
+    whatsapp.target = "_blank";
+    whatsapp.rel = "noopener noreferrer";
+    const call = element("a", "order-contact-call", "Call");
+    call.href = `tel:${order.phone.replace(/[^0-9+]/g, "")}`;
+    links.append(whatsapp, call);
+    return links;
+  }
+
   function renderOrder(order, options = {}) {
     const card = element("article", "order-card");
     const heading = element("div", "order-card-heading");
@@ -66,7 +89,9 @@
         ["Note", order.note],
       ].forEach(([label, value]) => {
         if (!value) return;
-        customer.append(element("dt", "", label), element("dd", "", value));
+        const detail = element("dd", "", value);
+        if (label === "Phone") detail.append(contactLinks(order));
+        customer.append(element("dt", "", label), detail);
       });
       card.append(customer);
       if (order.nextStatuses.length) {
@@ -80,6 +105,13 @@
         });
         card.append(actions);
       }
+    } else if (order.status === "pending") {
+      const actions = element("div", "order-customer-actions");
+      const cancel = element("button", "secondary-button", "Cancel order");
+      cancel.type = "button";
+      cancel.dataset.cancelOrder = order.id;
+      actions.append(cancel, element("p", "order-cancel-hint", "You can cancel until the shop confirms your order."));
+      card.append(actions);
     }
     return card;
   }

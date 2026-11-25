@@ -5,9 +5,13 @@ import math
 import os
 import re
 import secrets
+import smtplib
+import socket
 import sqlite3
+import threading
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 from functools import wraps
 from getpass import getpass
 from pathlib import Path
@@ -24,6 +28,8 @@ INSTANCE = ROOT / "instance"
 # Tests point this somewhere temporary so they never touch the shop's real data.
 DATABASE = Path(os.environ.get("PITSTOP_DATABASE") or INSTANCE / "pitstop.sqlite3")
 SECRET_KEY_FILE = INSTANCE / "secret_key"
+# The Gmail App Password for sending order emails. Kept out of git (instance/ is ignored).
+MAIL_PASSWORD_FILE = INSTANCE / "mail_password"
 CATALOG_FILE = ROOT / "data" / "catalog.json"
 SETTINGS_FILE = ROOT / "data" / "settings.json"
 IMAGES = ROOT / "images"
@@ -441,7 +447,7 @@ def validate_product(data, product_id=None):
     if product_id is None:
         product_id = data.get("id")
         if not isinstance(product_id, str) or not PRODUCT_ID_PATTERN.fullmatch(product_id):
-            return None, "Use a product ID with lowercase letters, numbers, and hyphens."
+            return None, "Use a link name with lowercase letters, numbers, and dashes."
     allowed = PRODUCT_FIELDS | set(PRODUCT_EXTRA_DEFAULTS) | ({"id"} if "id" in data else set())
     if set(data) - allowed:
         return None, "The product contains unsupported fields."
@@ -505,6 +511,80 @@ def close_db(_error=None):
     db = g.pop("db", None)
     if db is not None:
         db.close()
+
+
+def mail_password():
+    password = os.environ.get("PITSTOP_MAIL_PASSWORD", "")
+    if not password and MAIL_PASSWORD_FILE.exists():
+        password = MAIL_PASSWORD_FILE.read_text(encoding="utf-8")
+    # Google shows App Passwords in groups of four ("abcd efgh ijkl mnop").
+    return password.replace(" ", "").strip()
+
+
+def deliver_email(message):
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as smtp:
+        smtp.login(SHOP_EMAIL, mail_password())
+        smtp.send_message(message)
+
+
+# Tests swap this out so nothing is really sent.
+MAILER = deliver_email
+
+
+def send_shop_email(subject, body, reply_to=""):
+    """Email the shop in the background. Does nothing until a mail password is set."""
+    if not SHOP_EMAIL or not mail_password():
+        return False
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = f"PitStop.co website <{SHOP_EMAIL}>"
+    message["To"] = SHOP_EMAIL
+    if reply_to:
+        message["Reply-To"] = reply_to
+    message.set_content(body)
+
+    def send():
+        try:
+            MAILER(message)
+        except Exception as error:  # noqa: BLE001 - a failed email must never break an order
+            app.logger.warning("Could not email the shop about %r: %s", subject, error)
+
+    if app.testing:
+        send()
+    else:
+        threading.Thread(target=send, daemon=True).start()
+    return True
+
+
+def order_email_body(order, email, heading):
+    lines = [heading, ""]
+    lines += [f"  {item['name']} x {item['quantity']}  RM{item['price'] * item['quantity']:.2f}" for item in order["items"]]
+    lines += [
+        f"  Total: RM{order['subtotal']:.2f}",
+        "",
+        f"Customer: {order['name']}",
+        f"Email: {email or '-'}",
+        f"Phone: {order['phone']}",
+        f"Ship to: {order['address']}",
+    ]
+    if order["note"]:
+        lines.append(f"Note: {order['note']}")
+    lines += ["", f"Open the orders page: {request.url_root}admin.html#orders"]
+    return "\n".join(lines)
+
+
+def return_to_stock(db, order_id):
+    """Put an order's units back on the shelf; skipped for products deleted since."""
+    db.execute(
+        """
+        UPDATE products SET stock = stock + (
+            SELECT SUM(quantity) FROM order_items
+            WHERE order_id = ? AND product_id = products.id
+        )
+        WHERE id IN (SELECT product_id FROM order_items WHERE order_id = ?)
+        """,
+        (order_id, order_id),
+    )
 
 
 def get_db():
@@ -601,6 +681,11 @@ def script_file(filename):
 @app.get("/styles/<path:filename>")
 def stylesheet_file(filename):
     return send_from_directory(ROOT / "styles", filename)
+
+
+@app.get("/favicon.ico")
+def favicon():
+    return send_from_directory(IMAGES / "logo", "pitstop-icon.png", mimetype="image/png")
 
 
 @app.get("/images/<path:filename>")
@@ -1010,8 +1095,51 @@ def place_order():
     except Exception:
         db.rollback()
         raise
-    order = db.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchall()
-    return jsonify(order=order_payloads(db, order)[0]), 201
+    order = order_payloads(db, db.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchall())[0]
+    email = current_user()["email"]
+    send_shop_email(
+        f"New order #{order_id}: RM{order['subtotal']:.2f} from {order['name']}",
+        order_email_body(order, email, f"A new order #{order_id} was placed on the website."),
+        reply_to=email,
+    )
+    return jsonify(order=order), 201
+
+
+@app.post("/api/orders/<int:order_id>/cancel")
+@require_user
+def cancel_my_order(order_id):
+    """Customers may cancel until the shop confirms the order."""
+    db = get_db()
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        order = db.execute(
+            "SELECT status FROM orders WHERE id = ? AND user_id = ?", (order_id, session["user_id"])
+        ).fetchone()
+        if order is None:
+            db.rollback()
+            return jsonify(error="That order was not found."), 404
+        if order["status"] != "pending":
+            db.rollback()
+            return jsonify(
+                error="The shop has already confirmed this order. Contact the shop to change or cancel it."
+            ), 409
+        return_to_stock(db, order_id)
+        db.execute(
+            "UPDATE orders SET status = 'cancelled', updated_at = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), order_id),
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    order = order_payloads(db, db.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchall())[0]
+    email = current_user()["email"]
+    send_shop_email(
+        f"Order #{order_id} was cancelled by {order['name']}",
+        order_email_body(order, email, f"The customer cancelled order #{order_id}. Its items are back in stock."),
+        reply_to=email,
+    )
+    return jsonify(order=order)
 
 
 @app.get("/api/admin/dashboard")
@@ -1040,12 +1168,17 @@ def admin_dashboard():
     stock = db.execute(
         """
         SELECT COUNT(*) AS products, COALESCE(SUM(stock), 0) AS units,
-            COALESCE(SUM(price * stock), 0) AS value, COALESCE(SUM(stock = 0), 0) AS sold_out
+            COALESCE(SUM(price * stock), 0) AS value,
+            COALESCE(SUM(stock = 0 AND preorder = 0 AND available = 1), 0) AS sold_out
         FROM products
         """
     ).fetchone()
+    # Pre-orders and hidden listings aren't on sale, so running low doesn't matter for them.
     stock_alerts = db.execute(
-        "SELECT * FROM products WHERE stock <= 2 ORDER BY stock, name COLLATE NOCASE LIMIT 8"
+        """
+        SELECT * FROM products WHERE stock <= 2 AND preorder = 0 AND available = 1
+        ORDER BY stock, name COLLATE NOCASE LIMIT 8
+        """
     ).fetchall()
     top_products = db.execute(
         """
@@ -1093,6 +1226,21 @@ def admin_dashboard():
     )
 
 
+@app.get("/api/admin/orders/latest")
+@require_admin
+def admin_latest_order():
+    db = get_db()
+    latest = db.execute("SELECT id, customer_name, subtotal FROM orders ORDER BY id DESC LIMIT 1").fetchone()
+    pending = db.execute("SELECT COUNT(*) FROM orders WHERE status = 'pending'").fetchone()[0]
+    return jsonify(
+        latestId=latest["id"] if latest else 0,
+        latestName=latest["customer_name"] if latest else "",
+        latestTotal=latest["subtotal"] if latest else 0,
+        pending=pending,
+        emailAlerts=bool(SHOP_EMAIL and mail_password()),
+    )
+
+
 @app.get("/api/admin/orders")
 @require_admin
 def admin_list_orders():
@@ -1123,17 +1271,7 @@ def admin_update_order(order_id):
             db.rollback()
             return jsonify(error=f"A {order['status']} order cannot be marked {status}."), 409
         if status == "cancelled":
-            # Return the units to the shelf; skipped for products deleted since.
-            db.execute(
-                """
-                UPDATE products SET stock = stock + (
-                    SELECT SUM(quantity) FROM order_items
-                    WHERE order_id = ? AND product_id = products.id
-                )
-                WHERE id IN (SELECT product_id FROM order_items WHERE order_id = ?)
-                """,
-                (order_id, order_id),
-            )
+            return_to_stock(db, order_id)
         db.execute(
             "UPDATE orders SET status = ?, updated_at = ? WHERE id = ?",
             (status, datetime.now(timezone.utc).isoformat(), order_id),
@@ -1200,7 +1338,7 @@ def admin_create_product():
         )
         get_db().commit()
     except sqlite3.IntegrityError:
-        return jsonify(error="A product with that ID already exists."), 409
+        return jsonify(error="Another product already uses that link name. Change it slightly, for example add the colour or year."), 409
     return jsonify(product=product), 201
 
 
@@ -1208,12 +1346,13 @@ def admin_create_product():
 @require_admin
 def admin_update_product(product_id):
     data = request.get_json(silent=True) or {}
+    stock_was = data.pop("stockWas", None) if isinstance(data, dict) else None
     product, error = validate_product(data, product_id)
     if error:
         return jsonify(error=error), 400
     # Leave this product out, so its own old spelling can still be corrected.
     use_existing_spellings(product, exclude_id=product_id)
-    return save_product(product_id, product)
+    return save_product(product_id, product, stock_was)
 
 
 # Fields the product list can change in one click, without the full form.
@@ -1224,6 +1363,7 @@ QUICK_FIELDS = {"stock", "preorder", "bestSeller", "newArrival", "chase", "avail
 @require_admin
 def admin_quick_update_product(product_id):
     data = request.get_json(silent=True)
+    stock_was = data.pop("stockWas", None) if isinstance(data, dict) else None
     if not isinstance(data, dict) or not data or set(data) - QUICK_FIELDS:
         return jsonify(error="Only stock and status can be changed here."), 400
     row = get_db().execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
@@ -1234,24 +1374,42 @@ def admin_quick_update_product(product_id):
     product, error = validate_product({**current, **data}, product_id)
     if error:
         return jsonify(error=error), 400
-    return save_product(product_id, product)
+    return save_product(product_id, product, stock_was)
 
 
-def save_product(product_id, product):
+def save_product(product_id, product, stock_was=None):
+    """Save an edited product.
+
+    stock_was is the stock the admin saw when they started editing. If an order
+    came in since then, saving their old number would put sold units back on
+    the shelf, so keep the live stock, or ask them to check if they changed it.
+    """
     db = get_db()
+    db.execute("BEGIN IMMEDIATE")
     before = db.execute(
         "SELECT stock, preorder, available FROM products WHERE id = ?", (product_id,)
     ).fetchone()
     if before is None:
+        db.rollback()
         return jsonify(error="That product was not found."), 404
+    if isinstance(stock_was, int) and not isinstance(stock_was, bool) and before["stock"] != stock_was:
+        if product["stock"] == stock_was:
+            product["stock"] = before["stock"]
+        else:
+            db.rollback()
+            return jsonify(
+                error=(
+                    f"The stock changed while you were editing (an order may have come in). "
+                    f"It is now {before['stock']}. Check the number and save again."
+                ),
+                currentStock=before["stock"],
+            ), 409
     was_ready = before["stock"] > 0 and not before["preorder"] and before["available"]
     columns = PRODUCT_COLUMNS[1:]
-    cursor = db.execute(
+    db.execute(
         f"UPDATE products SET {', '.join(f'{column} = ?' for column in columns)} WHERE id = ?",
         (*product_row(product)[1:], product_id),
     )
-    if cursor.rowcount == 0:
-        return jsonify(error="That product was not found."), 404
     db.execute(
         "DELETE FROM cart_items WHERE product_id = ? AND (quantity > ? OR ? OR ?)",
         (product_id, product["stock"], int(product["preorder"]), int(not product["available"])),
@@ -1304,6 +1462,14 @@ def admin_upload_image():
     filename = f"{datetime.now(timezone.utc):%Y%m%d}-{secrets.token_hex(8)}.{extension}"
     (UPLOADS / filename).write_bytes(data)
     return jsonify(path=f"images/uploads/{filename}"), 201
+
+
+@app.errorhandler(404)
+def not_found(_error):
+    if request.path.startswith("/api/"):
+        return jsonify(error="Not found."), 404
+    page_html = (ROOT / "404.html").read_text(encoding="utf-8")
+    return app.response_class(social_links(page_html), status=404, mimetype="text/html")
 
 
 @app.errorhandler(413)
@@ -1373,10 +1539,49 @@ def reset_password():
     print("Password updated. You can sign in with the new password now.")
 
 
+def set_mail_password():
+    if not SHOP_EMAIL:
+        raise SystemExit("Set shopEmail in data/settings.json first.")
+    print(f"Paste the 16-letter Google App Password for {SHOP_EMAIL}.")
+    print("Create one at https://myaccount.google.com/apppasswords (2-Step Verification must be on).")
+    password = getpass("App Password (hidden while you type): ").replace(" ", "").strip()
+    if len(password) != 16 or not password.isalpha():
+        raise SystemExit("That doesn't look like an App Password: it should be 16 letters.")
+    INSTANCE.mkdir(exist_ok=True)
+    MAIL_PASSWORD_FILE.write_text(password, encoding="utf-8")
+    print("Saved. Sending a test email...")
+    send_test_email()
+
+
+def send_test_email():
+    if not SHOP_EMAIL or not mail_password():
+        raise SystemExit("No mail password yet. Run: python app.py set-mail-password")
+    message = EmailMessage()
+    message["Subject"] = "PitStop.co order emails are working"
+    message["From"] = f"PitStop.co website <{SHOP_EMAIL}>"
+    message["To"] = SHOP_EMAIL
+    message.set_content("You'll get an email like this whenever a customer places or cancels an order.")
+    try:
+        deliver_email(message)
+    except smtplib.SMTPAuthenticationError:
+        raise SystemExit(
+            "Gmail refused the password. Make sure it's an App Password for "
+            f"{SHOP_EMAIL}, not your normal password, then run set-mail-password again."
+        )
+    except (OSError, smtplib.SMTPException) as error:
+        raise SystemExit(f"Could not send the test email: {error}")
+    print(f"Test email sent to {SHOP_EMAIL}. Check the inbox.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run or administer the PitStop.co storefront.")
     parser.add_argument(
-        "command", nargs="?", choices=("run", "create-admin", "reset-password"), default="run"
+        "command", nargs="?", default="run",
+        choices=("run", "create-admin", "reset-password", "set-mail-password", "test-email"),
+    )
+    parser.add_argument(
+        "--lan", action="store_true",
+        help="Also let phones and other devices on the same Wi-Fi open the shop (for testing).",
     )
     arguments = parser.parse_args()
     init_db()
@@ -1386,7 +1591,39 @@ def main():
     if arguments.command == "reset-password":
         reset_password()
         return
-    app.run(host="127.0.0.1", port=int(os.environ.get("PORT", "5000")), debug=False)
+    if arguments.command == "set-mail-password":
+        set_mail_password()
+        return
+    if arguments.command == "test-email":
+        send_test_email()
+        return
+    port = int(os.environ.get("PORT", "5000"))
+    if arguments.lan:
+        print_lan_address(port)
+        app.run(host="0.0.0.0", port=port, debug=False)
+    else:
+        app.run(host="127.0.0.1", port=port, debug=False)
+
+
+def lan_address():
+    """This computer's address on the Wi-Fi. Nothing is sent; this only asks which network card would be used."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        try:
+            probe.connect(("192.168.0.1", 80))
+            return probe.getsockname()[0]
+        except OSError:
+            return "127.0.0.1"
+
+
+def print_lan_address(port):
+    address = lan_address()
+    line = "=" * 60
+    print(line)
+    print("  Phone testing is ON.")
+    print(f"  On your phone (same Wi-Fi), open:  http://{address}:{port}")
+    print("  If Windows asks about the firewall, allow Private networks.")
+    print("  Stop with Ctrl+C. Run plain 'python app.py' when you're done testing.")
+    print(line)
 
 
 init_db()

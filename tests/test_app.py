@@ -22,6 +22,10 @@ class StorefrontTests(unittest.TestCase):
         # The shop's own catalog starts empty, so tests seed demo listings from a fixture.
         storefront.CATALOG_FILE = Path(__file__).with_name("catalog.json")
         storefront.UPLOADS = Path(self.temp_dir.name) / "uploads"
+        # Never send real email from tests, even once the shop has a mail password saved.
+        self.sent_emails = []
+        storefront.MAILER = self.sent_emails.append
+        storefront.MAIL_PASSWORD_FILE = Path(self.temp_dir.name) / "mail_password"
         storefront.init_db()
         storefront.app.config.update(TESTING=True)
         self.client = storefront.app.test_client()
@@ -186,6 +190,81 @@ class StorefrontTests(unittest.TestCase):
         self.assertEqual(self.stock_of("midnight-gt"), 4)
         response = self.request_with_csrf("PATCH", f"/api/admin/orders/{order_id}", json={"status": "confirmed"})
         self.assertEqual(response.status_code, 409)
+
+    def test_customer_can_cancel_until_shop_confirms(self):
+        order_id = self.place_order().get_json()["order"]["id"]
+        self.assertEqual(self.stock_of("midnight-gt"), 1)
+        response = self.request_with_csrf("POST", f"/api/orders/{order_id}/cancel")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["order"]["status"], "cancelled")
+        self.assertEqual(self.stock_of("midnight-gt"), 4)
+        # Cancelling twice, or someone else's order, is refused.
+        self.assertEqual(self.request_with_csrf("POST", f"/api/orders/{order_id}/cancel").status_code, 409)
+        self.assertEqual(self.request_with_csrf("POST", "/api/orders/999/cancel").status_code, 404)
+
+    def test_customer_cannot_cancel_confirmed_order(self):
+        order_id = self.place_order().get_json()["order"]["id"]
+        self.request_with_csrf("POST", "/api/logout", json={})
+        self.refresh_csrf()
+        self.sign_in_admin()
+        self.request_with_csrf("PATCH", f"/api/admin/orders/{order_id}", json={"status": "confirmed"})
+        self.request_with_csrf("POST", "/api/logout", json={})
+        self.refresh_csrf()
+        self.request_with_csrf(
+            "POST", "/api/login", json={"email": "collector@example.com", "password": "correct horse 7"}
+        )
+        self.refresh_csrf()
+        response = self.request_with_csrf("POST", f"/api/orders/{order_id}/cancel")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(self.stock_of("midnight-gt"), 1)
+
+    def test_shop_is_emailed_about_orders_once_password_is_set(self):
+        original = storefront.SHOP_EMAIL
+        storefront.SHOP_EMAIL = "shop@example.com"
+        try:
+            # No password yet: nothing is sent, and the order still goes through.
+            self.assertEqual(self.place_order().status_code, 201)
+            self.assertEqual(self.sent_emails, [])
+            storefront.MAIL_PASSWORD_FILE.write_text("abcd efgh ijkl mnop", encoding="utf-8")
+            self.request_with_csrf("PUT", "/api/cart/midnight-gt", json={"quantity": 1})
+            order = self.request_with_csrf(
+                "POST", "/api/orders", json={"name": "Collector", "phone": "0123456789", "address": "1 Jalan Test"}
+            ).get_json()["order"]
+            [email] = self.sent_emails
+            self.assertIn(f"New order #{order['id']}", email["Subject"])
+            self.assertEqual(email["To"], "shop@example.com")
+            self.assertEqual(email["Reply-To"], "collector@example.com")
+            self.assertIn("1 Jalan Test", email.get_content())
+            self.request_with_csrf("POST", f"/api/orders/{order['id']}/cancel")
+            self.assertIn("cancelled", self.sent_emails[-1]["Subject"])
+        finally:
+            storefront.SHOP_EMAIL = original
+
+    def test_a_failed_email_never_breaks_an_order(self):
+        def broken_mailer(_message):
+            raise OSError("no internet")
+        storefront.MAILER = broken_mailer
+        storefront.MAIL_PASSWORD_FILE.write_text("abcdefghijklmnop", encoding="utf-8")
+        with self.assertLogs(storefront.app.logger, "WARNING"):
+            self.assertEqual(self.place_order().status_code, 201)
+
+    def test_admin_can_check_for_new_orders(self):
+        self.place_order()
+        self.assertEqual(self.client.get("/api/admin/orders/latest").status_code, 403)
+        self.request_with_csrf("POST", "/api/logout", json={})
+        self.refresh_csrf()
+        self.sign_in_admin()
+        latest = self.client.get("/api/admin/orders/latest").get_json()
+        self.assertEqual((latest["latestName"], latest["pending"]), ("Collector", 1))
+        self.assertGreater(latest["latestId"], 0)
+
+    def test_missing_page_is_friendly(self):
+        response = self.client.get("/no-such-page")
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("Wrong turn at the pit lane.", response.get_data(as_text=True))
+        self.assertEqual(self.client.get("/secret.html").status_code, 404)
+        api = self.client.get("/api/no-such-thing")
+        self.assertEqual((api.status_code, api.get_json()), (404, {"error": "Not found."}))
 
     def test_customer_cannot_see_admin_orders(self):
         self.place_order()
@@ -403,6 +482,50 @@ class StorefrontTests(unittest.TestCase):
             self.request_with_csrf("PATCH", "/api/admin/products/no-such/quick", json={"stock": 1}).status_code, 404
         )
 
+    def test_old_stock_number_never_undoes_a_sale(self):
+        self.sign_in_admin()
+        quick = lambda body: self.request_with_csrf("PATCH", "/api/admin/products/apex-track/quick", json=body)
+        self.assertEqual(quick({"stock": 5}).status_code, 200)
+        # The admin opens the edit form at 5, then a customer buys 2 elsewhere.
+        with closing(storefront.connect_db()) as db:
+            db.execute("UPDATE products SET stock = 3 WHERE id = 'apex-track'")
+            db.commit()
+        product = self.client.get("/api/admin/products").get_json()["products"]
+        product = next(entry for entry in product if entry["id"] == "apex-track")
+        product.pop("id")
+        # Saving the form without touching stock keeps the live 3, not the stale 5.
+        response = self.request_with_csrf(
+            "PATCH", "/api/admin/products/apex-track", json={**product, "stock": 5, "stockWas": 5, "name": "Renamed"}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["product"]["stock"], 3)
+        # Changing stock from a stale number is refused, and the live number comes back.
+        response = quick({"stock": 6, "stockWas": 5})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["currentStock"], 3)
+        self.assertEqual(quick({"stock": 6, "stockWas": 3}).get_json()["product"]["stock"], 6)
+
+    def test_dashboard_does_not_call_preorders_sold_out(self):
+        self.sign_in_admin()
+        quick = lambda product_id, body: self.request_with_csrf(
+            "PATCH", f"/api/admin/products/{product_id}/quick", json=body
+        )
+        products = self.client.get("/api/admin/products").get_json()["products"]
+        for product in products:
+            quick(product["id"], {"stock": 10, "preorder": False})
+        quick("apex-track", {"stock": 0, "preorder": True})
+        dashboard = self.client.get("/api/admin/dashboard").get_json()
+        self.assertEqual(dashboard["soldOut"], 0)
+        self.assertEqual(dashboard["stockAlerts"], [])
+        quick("apex-track", {"preorder": False})
+        dashboard = self.client.get("/api/admin/dashboard").get_json()
+        self.assertEqual((dashboard["soldOut"], len(dashboard["stockAlerts"])), (1, 1))
+
+    def test_favicon(self):
+        response = self.client.get("/favicon.ico")
+        self.assertEqual((response.status_code, response.mimetype), (200, "image/png"))
+        response.close()
+
     def test_unavailable_product_is_hidden_from_shop(self):
         self.register_customer()
         self.request_with_csrf("PUT", "/api/cart/midnight-gt", json={"quantity": 1})
@@ -454,10 +577,11 @@ class StorefrontTests(unittest.TestCase):
         self.assertIn("Bad &#34;car&#34; &lt;script&gt;", page)
 
     def test_facebook_link_only_shows_when_set(self):
-        self.assertNotIn("footer-facebook", self.client.get("/").get_data(as_text=True))
         original = storefront.SHOP_FACEBOOK
-        storefront.SHOP_FACEBOOK = "https://www.facebook.com/pitstop.co.my"
         try:
+            storefront.SHOP_FACEBOOK = ""
+            self.assertNotIn("footer-facebook", self.client.get("/").get_data(as_text=True))
+            storefront.SHOP_FACEBOOK = "https://www.facebook.com/pitstop.co.my"
             page = self.client.get("/contact.html").get_data(as_text=True)
         finally:
             storefront.SHOP_FACEBOOK = original

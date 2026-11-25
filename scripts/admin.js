@@ -4,6 +4,16 @@
   const productsMessage = document.querySelector("#products-message");
   const productList = document.querySelector("#admin-product-list");
   const idField = form.elements.id;
+  // The stock the admin saw when they opened the form (see save_product on the server).
+  let formStockWas = null;
+  // The ID follows the name until the admin types their own.
+  let idTouched = false;
+  const slugify = (text) => text.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60).replace(/-+$/, "");
+  form.elements.name.addEventListener("input", () => {
+    if (!idField.readOnly && !idTouched) idField.value = slugify(form.elements.name.value);
+  });
+  idField.addEventListener("input", () => { idTouched = idField.value !== ""; });
   const submitButton = form.querySelector("button[type=submit]");
   const cancelEdit = document.querySelector("#cancel-edit");
   const adminMessage = document.querySelector("#admin-message");
@@ -148,6 +158,7 @@
     if (!product) return;
     idField.value = product.id;
     idField.readOnly = true;
+    formStockWas = product.stock;
     for (const key of ["name", "price", "stock", "image", "imageAlt", "description"]) {
       form.elements[key].value = product[key];
     }
@@ -368,7 +379,12 @@
       loadDashboard().catch(() => {});
     } catch (error) {
       // Put the row back the way the server has it, then say why.
-      replaceProductRow(products.find((entry) => entry.id === productId));
+      const product = products.find((entry) => entry.id === productId);
+      if (product && Number.isInteger(error.data?.currentStock)) {
+        product.stock = error.data.currentStock;
+        syncOpenForm(product);
+      }
+      replaceProductRow(product);
       showQuickNote(productId, `Not saved: ${error.message}`, "error");
     }
   }
@@ -377,6 +393,7 @@
   function syncOpenForm(product) {
     if (!product || !idField.readOnly || idField.value !== product.id) return;
     form.elements.stock.value = product.stock;
+    formStockWas = product.stock;
     form.elements.preorder.checked = product.preorder;
     form.elements.bestSeller.checked = product.bestSeller;
     form.elements.newArrival.checked = product.newArrival;
@@ -409,7 +426,7 @@
         showQuickNote(id, "Stock must be a whole number, 0 or more.", "error");
         return;
       }
-      if (stock !== product.stock) quickSave(id, { stock });
+      if (stock !== product.stock) quickSave(id, { stock, stockWas: product.stock });
     }
   });
 
@@ -435,7 +452,7 @@
       box.querySelector('[data-quick-step="-1"]').disabled = next <= 0;
       window.clearTimeout(stockTimers.get(id));
       stockTimers.set(id, window.setTimeout(() => {
-        if (next !== product.stock) quickSave(id, { stock: next });
+        if (next !== product.stock) quickSave(id, { stock: next, stockWas: product.stock });
       }, 600));
     }
   });
@@ -928,6 +945,8 @@
     CHOICE_KEYS.forEach(syncNewChoice);
     Object.keys(trays).forEach(clearTray);
     idField.readOnly = false;
+    idTouched = false;
+    formStockWas = null;
     document.querySelector("#product-form-title").textContent = "Add a product";
     submitButton.textContent = "Add product";
     formMessage.textContent = "";
@@ -942,7 +961,7 @@
     formDirty = false;
     if (!productDialog.open) productDialog.showModal();
     productDialog.querySelector(".dialog-body").scrollTop = 0;
-    (idField.readOnly ? form.elements.name : idField).focus();
+    form.elements.name.focus();
   }
 
   // Closing throws away unsaved changes, so ask first if there are any.
@@ -984,9 +1003,125 @@
     await refreshAll();
   }
 
-  initialize().catch((error) => {
+  initialize().then(startOrderWatch).catch((error) => {
     adminMessage.textContent = `Could not load the dashboard: ${error.message}`;
   });
+
+  // ---- New-order alerts: checks every 30 seconds while this page is open ----
+  const alertsButton = document.querySelector("#order-alerts");
+  const alertsLabel = document.querySelector("#order-alerts-label");
+  const banner = document.querySelector("#new-order-banner");
+  const pageTitle = document.title;
+  let alertsOn = localStorage.getItem("pitstopOrderAlerts") === "on";
+  let lastOrderId = null;
+  let audio = null;
+
+  function renderAlertsButton() {
+    alertsButton.setAttribute("aria-pressed", String(alertsOn));
+    alertsButton.classList.toggle("is-on", alertsOn);
+    alertsLabel.textContent = alertsOn ? "Order alerts: on" : "Order alerts: off";
+  }
+
+  function unlockSound() {
+    if (!window.AudioContext) return;
+    audio ??= new AudioContext();
+    if (audio.state === "suspended") audio.resume().catch(() => {});
+  }
+
+  // Two short rising tones; no sound file needed.
+  function chime() {
+    if (!audio || audio.state !== "running") return;
+    [880, 1320].forEach((frequency, index) => {
+      const start = audio.currentTime + index * 0.18;
+      const tone = audio.createOscillator();
+      const volume = audio.createGain();
+      tone.frequency.value = frequency;
+      volume.gain.setValueAtTime(0.0001, start);
+      volume.gain.exponentialRampToValueAtTime(0.25, start + 0.02);
+      volume.gain.exponentialRampToValueAtTime(0.0001, start + 0.3);
+      tone.connect(volume).connect(audio.destination);
+      tone.start(start);
+      tone.stop(start + 0.32);
+    });
+  }
+
+  function announceOrder(data, newCount) {
+    const text = newCount > 1
+      ? `${newCount} new orders! The latest is #${data.latestId} from ${data.latestName}.`
+      : `New order #${data.latestId} from ${data.latestName}: ${formatPrice(data.latestTotal)}.`;
+    document.querySelector("#new-order-text").textContent = text;
+    banner.hidden = false;
+    if (document.hidden) document.title = `(${data.pending}) New order | ${pageTitle}`;
+    if (!alertsOn) return;
+    chime();
+    if ("Notification" in window && Notification.permission === "granted") {
+      const note = new Notification(`New order #${data.latestId}`, {
+        body: `${data.latestName} · ${formatPrice(data.latestTotal)}`,
+        icon: "images/logo/pitstop-icon.png",
+        tag: "pitstop-new-order",
+      });
+      note.addEventListener("click", () => {
+        window.focus();
+        showTab("orders");
+        note.close();
+      });
+    }
+  }
+
+  function renderEmailNote(emailAlerts) {
+    const note = document.querySelector("#email-alerts-note");
+    note.hidden = emailAlerts;
+    note.textContent = "Order emails are off. To get an email for every order, run python app.py set-mail-password once (see the README).";
+  }
+
+  async function checkForOrders() {
+    try {
+      const data = await window.PitstopApi.request("/api/admin/orders/latest");
+      renderEmailNote(data.emailAlerts);
+      if (lastOrderId !== null && data.latestId > lastOrderId) {
+        announceOrder(data, data.latestId - lastOrderId);
+        await refreshAll();
+      }
+      lastOrderId = data.latestId;
+    } catch {
+      // Offline for a moment or signed out; try again next time.
+    }
+  }
+
+  function startOrderWatch() {
+    renderAlertsButton();
+    checkForOrders();
+    window.setInterval(checkForOrders, 30000);
+  }
+
+  alertsButton.addEventListener("click", async () => {
+    alertsOn = !alertsOn;
+    localStorage.setItem("pitstopOrderAlerts", alertsOn ? "on" : "off");
+    renderAlertsButton();
+    if (!alertsOn) return;
+    unlockSound();
+    if ("Notification" in window && Notification.permission === "default") {
+      await Notification.requestPermission();
+    }
+    chime();
+    adminMessage.textContent = "Order alerts are on. Keep this page open (a background tab is fine) and you'll hear a chime for each new order.";
+    if ("Notification" in window && Notification.permission === "denied") {
+      adminMessage.textContent += " Pop-up notifications are blocked in this browser, so you'll only get the chime and the banner.";
+    }
+  });
+
+  // Browsers only allow sound after a click on the page, so unlock it on the first one.
+  document.addEventListener("pointerdown", () => { if (alertsOn) unlockSound(); }, { once: true });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    document.title = pageTitle;
+    checkForOrders();
+  });
+  document.querySelector("#new-order-view").addEventListener("click", () => {
+    banner.hidden = true;
+    showTab("orders");
+  });
+  document.querySelector("#new-order-dismiss").addEventListener("click", () => { banner.hidden = true; });
 
   document.querySelector(".admin-tabs").addEventListener("click", (event) => {
     const button = event.target.closest("[data-tab]");
@@ -1066,7 +1201,8 @@
       // Empty rows are skipped rather than rejected.
       links: linkItems.filter((link) => link.url.trim()).map((link) => ({ url: link.url.trim(), title: link.title.trim() })),
     };
-    if (!editing) payload.id = values.get("id");
+    if (editing) payload.stockWas = formStockWas;
+    else payload.id = values.get("id");
     try {
       const result = await window.PitstopApi.request(
         editing ? `/api/admin/products/${encodeURIComponent(idField.value)}` : "/api/admin/products",
@@ -1082,6 +1218,17 @@
       await refreshAll();
     } catch (error) {
       formMessage.textContent = error.message;
+      if (Number.isInteger(error.data?.currentStock)) {
+        // Show the live number; saving again uses whatever the admin leaves there.
+        formStockWas = error.data.currentStock;
+        form.elements.stock.value = error.data.currentStock;
+        const product = products.find((entry) => entry.id === idField.value);
+        if (product) {
+          product.stock = error.data.currentStock;
+          replaceProductRow(product);
+        }
+        form.elements.stock.focus();
+      }
     } finally {
       submitButton.disabled = false;
     }
