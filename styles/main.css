@@ -1144,3 +1144,27 @@ body:has(.product-dialog[open]) { overflow: hidden; }
   .instagram-button:hover { transform: none; }
 }
 .contact-card .instagram-button { color: #fff; text-decoration: none; }
+
+/* Facebook footer link, WhatsApp and share buttons */
+.footer-facebook { display: inline-flex; align-items: center; gap: 6px; }
+.footer-facebook svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
+.contact-card[hidden] { display: none; }
+.contact-whatsapp { margin-top: 18px; }
+.whatsapp-button svg, .share-button svg { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linejoin: round; stroke-linecap: round; }
+.whatsapp-button { display: inline-flex; align-items: center; gap: 9px; min-height: 44px; padding: 0 18px; border-radius: 12px; background: #1f9d55; color: #fff; font-size: 14px; font-weight: 700; text-decoration: none; transition: background .15s; }
+.whatsapp-button:hover { background: #17824a; }
+.contact-card .whatsapp-button { margin-top: 4px; color: #fff; text-decoration: none; }
+.detail-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.detail-contact { min-height: 44px; font: inherit; font-size: 14px; cursor: pointer; }
+.share-button { display: inline-flex; align-items: center; gap: 8px; padding: 0 16px; border: 1px solid var(--line); border-radius: 12px; background: #fff; color: var(--ink); font-weight: 700; transition: border-color .15s; }
+.share-button:hover { border-color: var(--maroon); color: var(--maroon); }
+@media (max-width: 520px) {
+  .detail-actions > * { flex: 1 1 0; justify-content: center; }
+}
+.footer-nav { align-items: center; }
+.footer-nav .footer-instagram, .footer-nav .footer-facebook { display: inline-flex; }
+.footer-facebook svg { fill: currentColor; stroke: none; }
+.detail-contact { white-space: nowrap; }
+@media (max-width: 520px) {
+  .detail-actions .whatsapp-button, .detail-actions .share-button { padding: 0 12px; }
+}

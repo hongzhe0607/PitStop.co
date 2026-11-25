@@ -435,6 +435,51 @@ class StorefrontTests(unittest.TestCase):
         ids = [p["id"] for p in self.client.get("/api/products").get_json()["products"]]
         self.assertIn("midnight-gt", ids)
 
+    def test_product_page_has_link_preview(self):
+        page = self.client.get("/product.html?id=midnight-gt").get_data(as_text=True)
+        self.assertIn('<meta property="og:type" content="product">', page)
+        self.assertIn('property="og:title" content="Example model name | PitStop.co"', page)
+        self.assertIn('property="og:url" content="http://localhost/product.html?id=midnight-gt"', page)
+        self.assertIn("RM", page.split('property="og:description"')[1].split(">")[0])
+        missing = self.client.get("/product.html?id=nope").get_data(as_text=True)
+        self.assertIn('<meta property="og:type" content="website">', missing)
+        self.assertIn('content="http://localhost/images/logo/pitstop-logo.png"', missing)
+
+    def test_link_preview_escapes_product_text(self):
+        with closing(storefront.connect_db()) as db:
+            db.execute("UPDATE products SET name = ? WHERE id = 'midnight-gt'", ('Bad "car" <script>',))
+            db.commit()
+        page = self.client.get("/product.html?id=midnight-gt").get_data(as_text=True)
+        self.assertNotIn("<script>", page.split("</head>")[0].split("<script src")[0])
+        self.assertIn("Bad &#34;car&#34; &lt;script&gt;", page)
+
+    def test_facebook_link_only_shows_when_set(self):
+        self.assertNotIn("footer-facebook", self.client.get("/").get_data(as_text=True))
+        original = storefront.SHOP_FACEBOOK
+        storefront.SHOP_FACEBOOK = "https://www.facebook.com/pitstop.co.my"
+        try:
+            page = self.client.get("/contact.html").get_data(as_text=True)
+        finally:
+            storefront.SHOP_FACEBOOK = original
+        self.assertIn('class="footer-facebook" href="https://www.facebook.com/pitstop.co.my"', page)
+
+    def test_shop_settings_validate_whatsapp_and_facebook(self):
+        original = storefront.SETTINGS_FILE
+        settings_file = Path(self.temp_dir.name) / "settings.json"
+        storefront.SETTINGS_FILE = settings_file
+        try:
+            settings_file.write_text(
+                '{"whatsappNumber": "+60 12-345 6789", "facebookUrl": "https://www.facebook.com/pitstop"}',
+                encoding="utf-8",
+            )
+            self.assertEqual(storefront.load_settings()[2:], ("60123456789", "https://www.facebook.com/pitstop"))
+            for bad in ('{"whatsappNumber": "call me"}', '{"facebookUrl": "http://evil.example/"}'):
+                settings_file.write_text(bad, encoding="utf-8")
+                with self.assertRaises(RuntimeError):
+                    storefront.load_settings()
+        finally:
+            storefront.SETTINGS_FILE = original
+
     def test_reset_password_command(self):
         self.register_customer()
         from unittest import mock

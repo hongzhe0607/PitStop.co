@@ -36,6 +36,7 @@
   let categories = [];
   let currentUser = null;
   let shopEmail = "";
+  let shopWhatsapp = "";
   let detailQuantity = 1;
   let toastTimer;
   let cartWasDragged = false;
@@ -340,6 +341,50 @@
     return `<button class="primary-link detail-add alert-button${onList ? " is-on" : ""}" type="button" data-alert="${escapeHtml(product.id)}" aria-pressed="${onList}">${label}</button>`;
   }
 
+  const WHATSAPP_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4.5 19.5 5.6 16A8 8 0 1 1 8.4 18.6Z"></path><path d="M9.2 8.6c.3-.6.6-.6.9-.6h.5l.9 2-.6.9c.4.9 1.2 1.7 2.1 2.1l.9-.6 2 .9v.5c0 .3 0 .6-.6.9-1.7.8-5.5-2.5-6.1-4.2-.2-.6-.2-1.3 0-1.9Z"></path></svg>';
+  const SHARE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="17.5" cy="5.5" r="2.5"></circle><circle cx="6.5" cy="12" r="2.5"></circle><circle cx="17.5" cy="18.5" r="2.5"></circle><path d="m8.7 10.8 6.6-4M8.7 13.2l6.6 4"></path></svg>';
+
+  function shareLink(product) {
+    return new URL(productUrl(product), window.location.href).href;
+  }
+
+  function whatsappLink(message) {
+    return `https://wa.me/${shopWhatsapp}?text=${encodeURIComponent(message)}`;
+  }
+
+  function contactMarkup(product) {
+    const question = product.preorder
+      ? `Hi PitStop.co, I'd like to ask about the pre-order for ${product.name} (${product.make} ${product.scale}).`
+      : product.stock > 0
+        ? `Hi PitStop.co, is ${product.name} (${product.make} ${product.scale}) still available?`
+        : `Hi PitStop.co, will ${product.name} (${product.make} ${product.scale}) be restocked?`;
+    const ask = shopWhatsapp
+      ? `<a class="detail-contact whatsapp-button" href="${escapeHtml(whatsappLink(`${question}\n${shareLink(product)}`))}" target="_blank" rel="noopener noreferrer">${WHATSAPP_ICON}Ask on WhatsApp</a>`
+      : "";
+    return `<div class="detail-actions">${ask}<button class="detail-contact share-button" type="button" data-share="${escapeHtml(product.id)}">${SHARE_ICON}Share</button></div>`;
+  }
+
+  async function shareProduct(button) {
+    const product = products.find((entry) => entry.id === button.dataset.share);
+    if (!product) return;
+    const url = shareLink(product);
+    const text = `${product.name} · ${formatPrice(product.price)} at PitStop.co`;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: product.name, text, url });
+      } catch (error) {
+        if (error.name !== "AbortError") showToast("Could not open sharing. Try again.");
+      }
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast("Link copied. Paste it into Facebook, Instagram, or WhatsApp.");
+    } catch {
+      window.prompt("Copy this link:", url);
+    }
+  }
+
   function alertNote(product) {
     if (canBuy(product)) return "";
     const onList = alerts.has(product.id);
@@ -562,6 +607,7 @@
           ${wishButton(product, "wish-large")}
         </div>
         ${alertNote(product)}
+        ${contactMarkup(product)}
       </div>`;
     renderScaleSection(product);
     renderResources(product);
@@ -645,6 +691,13 @@
     link.href = `mailto:${mailtoAddress()}?subject=Question%20for%20PitStop.co`;
     link.textContent = shopEmail;
     contactEmail.replaceChildren(link);
+  }
+
+  function renderShopWhatsapp() {
+    const card = document.querySelector("#whatsapp-card");
+    if (!card || !shopWhatsapp) return;
+    card.querySelector("a").href = whatsappLink("Hi PitStop.co, I have a question about a model.");
+    card.hidden = false;
   }
 
   function showToast(message) {
@@ -888,7 +941,9 @@
       brands = catalog.brands;
       categories = catalog.categories;
       shopEmail = catalog.shopEmail || "";
+      shopWhatsapp = catalog.whatsapp || "";
       renderShopEmail();
+      renderShopWhatsapp();
       brands.forEach((brand) => {
         if (!brandFilter) return;
         const option = document.createElement("option");
@@ -956,6 +1011,11 @@
     const poster = event.target.closest("[data-video-embed]");
     if (poster) {
       playVideo(poster);
+      return;
+    }
+    const shareButton = event.target.closest("[data-share]");
+    if (shareButton) {
+      shareProduct(shareButton);
       return;
     }
     const alertButton = event.target.closest("[data-alert]");

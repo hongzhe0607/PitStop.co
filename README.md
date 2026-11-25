@@ -33,7 +33,8 @@ When `PITSTOP_SECRET_KEY` is not set, the app generates a session key once and s
 ## Project files
 
 - `app.py` — Flask routes, account authentication, role checks, SQLite data access, and the admin command.
-- `data/settings.json` — admin emails (`adminEmails`) and the shop's contact email (`shopEmail`). Restart the app after editing it.
+- `data/settings.json` — admin emails (`adminEmails`), the shop's contact email (`shopEmail`), the shop's WhatsApp number with country code (`whatsappNumber`, e.g. `60123456789`) and Facebook Page link (`facebookUrl`). The WhatsApp buttons and the Facebook footer link stay hidden while those are empty. Restart the app after editing it.
+- Link previews: every page carries Open Graph tags, and product pages use the model's name, price, stock and main photo, so links shared on Facebook, WhatsApp or Instagram show a proper card. Previews only work once the site is online at a public address; a `localhost` link can't be read by Facebook or WhatsApp.
 - `data/catalog.json` — initial product listings and filter categories. Imported into SQLite the first time the app starts with an empty product table.
 - `index.html`, `diecast.html`, `product.html`, `about.html`, `contact.html` — storefront, product detail, and information pages.
 - `login.html`, `register.html`, `profile.html`, `admin.html` — sign-in, account creation, profile, and product administration pages.

@@ -1,4 +1,5 @@
 import argparse
+import html
 import json
 import math
 import os
@@ -13,6 +14,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from flask import Flask, abort, g, jsonify, request, send_from_directory, session
+from markupsafe import escape
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -77,10 +79,21 @@ def load_settings():
     for email in admin_emails | ({shop_email} if shop_email else set()):
         if not EMAIL_PATTERN.fullmatch(email):
             raise RuntimeError(f"{email!r} in the shop settings is not a valid email address.")
-    return admin_emails, shop_email
+    whatsapp = re.sub(r"[\s()+-]", "", str(settings.get("whatsappNumber", "")))
+    if whatsapp and not re.fullmatch(r"\d{8,15}", whatsapp):
+        raise RuntimeError(
+            "whatsappNumber in the shop settings must be a phone number with the country code, like 60123456789."
+        )
+    facebook = str(settings.get("facebookUrl", "")).strip()
+    if facebook:
+        url = urlsplit(facebook)
+        host = url.netloc.lower().removeprefix("www.").removeprefix("m.")
+        if url.scheme != "https" or host not in {"facebook.com", "fb.com"} or '"' in facebook:
+            raise RuntimeError("facebookUrl in the shop settings must be a https://www.facebook.com/... link.")
+    return admin_emails, shop_email, whatsapp, facebook
 
 
-ADMIN_EMAILS, SHOP_EMAIL = load_settings()
+ADMIN_EMAILS, SHOP_EMAIL, SHOP_WHATSAPP, SHOP_FACEBOOK = load_settings()
 
 def load_secret_key():
     """Keep local sessions valid across restarts and between worker processes."""
@@ -502,7 +515,70 @@ def get_db():
 
 @app.get("/")
 def home_page():
-    return send_from_directory(ROOT, "index.html")
+    return html_page("index")
+
+
+FACEBOOK_ICON = (
+    '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
+    '<path d="M14 8.5h2.5V5H14a3.5 3.5 0 0 0-3.5 3.5V11H8v3.5h2.5V21H14v-6.5h2.5L17 11h-3V9a.5.5 0 0 1 .5-.5Z"></path></svg>'
+)
+DEFAULT_SHARE_IMAGE = "images/logo/pitstop-logo.png"
+
+
+def absolute_url(path):
+    return path if path.startswith("https://") else request.url_root + path.lstrip("/")
+
+
+def share_meta(page_html, page):
+    """Link-preview tags so Facebook, WhatsApp and Instagram show a proper card."""
+    title = re.search(r"<title>(.*?)</title>", page_html, re.S)
+    description = re.search(r'<meta name="description" content="([^"]*)"', page_html)
+    meta = {
+        "og:site_name": "PitStop.co",
+        "og:type": "website",
+        "og:title": html.unescape(title.group(1)) if title else "PitStop.co",
+        "og:description": html.unescape(description.group(1)) if description else "",
+        "og:url": request.url,
+        "og:image": absolute_url(DEFAULT_SHARE_IMAGE),
+    }
+    if page == "product":
+        row = get_db().execute(
+            "SELECT * FROM products WHERE id = ? AND available = 1", (request.args.get("id", ""),)
+        ).fetchone()
+        if row is not None:
+            product = product_payload(row)
+            if product["preorder"]:
+                status = "Pre-order"
+            elif product["stock"] > 0:
+                status = "In stock"
+            else:
+                status = "Sold out"
+            summary = f"RM{product['price']:.2f} · {status} · {product['make']} {product['scale']}"
+            details = product["description"].strip()
+            meta.update({
+                "og:type": "product",
+                "og:title": f"{product['name']} | PitStop.co",
+                "og:description": f"{summary}. {details}"[:300] if details else summary,
+            })
+            if product["image"]:
+                meta["og:image"] = absolute_url(product["image"])
+            page_html = page_html.replace(title.group(0), f"<title>{escape(meta['og:title'])}</title>", 1) if title else page_html
+    meta["twitter:card"] = "summary_large_image"
+    tags = "".join(
+        f'    <meta {"name" if key.startswith("twitter:") else "property"}="{key}" content="{escape(value)}">\n'
+        for key, value in meta.items()
+    )
+    return page_html.replace("  </head>", tags + "  </head>", 1)
+
+
+def social_links(page_html):
+    if not SHOP_FACEBOOK:
+        return page_html
+    link = (
+        f'<a class="footer-facebook" href="{escape(SHOP_FACEBOOK)}" target="_blank" rel="noopener noreferrer">'
+        f"{FACEBOOK_ICON}Facebook</a>"
+    )
+    return page_html.replace("<!-- facebook-link -->", link)
 
 
 @app.get("/<page>.html")
@@ -510,7 +586,11 @@ def html_page(page):
     allowed = {"index", "diecast", "product", "about", "contact", "login", "register", "profile", "admin"}
     if page not in allowed:
         abort(404)
-    return send_from_directory(ROOT, f"{page}.html")
+    page_html = (ROOT / f"{page}.html").read_text(encoding="utf-8")
+    page_html = social_links(share_meta(page_html, page))
+    response = app.response_class(page_html, mimetype="text/html")
+    response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 @app.get("/scripts/<path:filename>")
@@ -644,7 +724,10 @@ def list_products():
     catalog = json.loads(CATALOG_FILE.read_text(encoding="utf-8"))
     brands = list(dict.fromkeys(catalog["brands"] + [product["make"] for product in products]))
     categories = list(dict.fromkeys(catalog["categories"] + [product["category"] for product in products]))
-    return jsonify(products=products, brands=brands, categories=categories, shopEmail=SHOP_EMAIL)
+    return jsonify(
+        products=products, brands=brands, categories=categories,
+        shopEmail=SHOP_EMAIL, whatsapp=SHOP_WHATSAPP, facebook=SHOP_FACEBOOK,
+    )
 
 
 @app.get("/api/cart")
