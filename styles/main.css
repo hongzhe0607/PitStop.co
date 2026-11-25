@@ -1131,3 +1131,16 @@ body:has(.product-dialog[open]) { overflow: hidden; }
   .catalog-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .catalog-search { grid-column: 1 / -1; }
 }
+
+/* Instagram links */
+.footer-instagram { display: inline-flex; align-items: center; gap: 6px; }
+.footer-instagram svg, .instagram-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.footer-instagram circle:last-child, .instagram-button circle:last-child { fill: currentColor; stroke: none; }
+.contact-instagram { margin-top: 18px; }
+.instagram-button { display: inline-flex; align-items: center; gap: 9px; min-height: 44px; margin-top: 4px; padding: 0 18px; border-radius: 12px; background: linear-gradient(45deg, #f09433, #dc2743 50%, #bc1888); color: #fff; font-size: 14px; font-weight: 700; text-decoration: none; transition: transform .15s, box-shadow .15s; }
+.instagram-button:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(188, 24, 136, .3); }
+.instagram-button svg { width: 18px; height: 18px; }
+@media (prefers-reduced-motion: reduce) {
+  .instagram-button:hover { transform: none; }
+}
+.contact-card .instagram-button { color: #fff; text-decoration: none; }
